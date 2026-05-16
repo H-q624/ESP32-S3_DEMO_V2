@@ -1,0 +1,69 @@
+menu "App Demo Configuration"
+
+    orsource "$IDF_PATH/examples/common_components/env_caps/$IDF_TARGET/Kconfig.env_caps"
+
+    menu "I2C Configuration"
+        config I2C_MASTER_SCL
+            int "SCL GPIO Num"
+            default 20
+            help
+                GPIO number for I2C Master clock line.
+
+        config I2C_MASTER_SDA
+            int "SDA GPIO Num"
+            default 21
+            help
+                GPIO number for I2C Master data line.
+
+        config I2C_MASTER_FREQUENCY
+            int "Master Frequency"
+            default 400000
+            help
+                I2C Speed of Master device.
+    endmenu
+    menu "I2S MEMS MIC Configuration"
+        config MIC_SAMPLE_RATE
+            int "Audio Sample Rate"
+            default 16000
+            help
+                Set the audio sample rate frequency. Usually 16000 or 44100 Hz if PCM data format supported.
+            
+        config MIC_I2S_DATA_GPIO
+            int "I2S Data GPIO"
+            default 2
+            help 
+                Set the GPIO number used for transmitting/receiving data from I2S. Connect to MIC_SD.
+        
+        config MIC_I2S_CLK_GPIO
+            int "I2S Clock GPIO"
+            default 4
+            help
+                Set the GPIO number used for the clock line from I2S.Connect to MIC_SCK
+               
+        config MIC_I2C_WS_GPIO
+            int "Data Select GPIO"
+            default 10
+            help
+                Set the GPIO numbet used for the data selection line. Connect to MIC_WS
+            
+            
+            
+    endmenu
+    menu "GPIO Configuration"
+        config BTN_PIN_IO
+            int "GPIO PIN For Button"
+            default 9
+            help
+                GPIO pin for extern button
+        config BEEP_PIN_IO
+            int "GPIO PIN For Buzzer"
+            default 3
+            help
+                GPIO pin for extern buzzer
+        config LED_PIN_IO
+            int "GPIO PIN For LED"
+            default 1
+            help 
+                GPIO pin for extern led light
+    endmenu
+endmenu
