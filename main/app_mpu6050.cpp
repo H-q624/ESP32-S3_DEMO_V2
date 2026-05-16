@@ -423,9 +423,61 @@ void APP_MPU6050::run_once() {
  */
 static void mpu6050_task_function(void *arg) {
   APP_MPU6050 *instance = static_cast<APP_MPU6050 *>(arg);
+  
+  // 姿态改变检测相关变量
+  float last_roll = 0.0f;
+  float last_pitch = 0.0f;
+  float last_yaw = 0.0f;
+  const float ATTITUDE_CHANGE_THRESHOLD = 5.0f; // 姿态变化阈值（度）
+  bool attitude_change_reported = false;
+  int stability_counter = 0;
+  const int STABILITY_THRESHOLD = 5; // 连续稳定次数
+  
   while (1) {
-    if (instance->app_mpu6050_check_module())
+    if (instance->app_mpu6050_check_module()) {
       instance->run_once();
+      
+      // 姿态改变检测
+      float current_roll = instance->data.angles.roll;
+      float current_pitch = instance->data.angles.pitch;
+      float current_yaw = instance->data.angles.yaw;
+      
+      // 计算角度变化
+      float delta_roll = fabs(current_roll - last_roll);
+      float delta_pitch = fabs(current_pitch - last_pitch);
+      float delta_yaw = fabs(current_yaw - last_yaw);
+      
+      // 处理角度环绕问题（如从179度变到-179度）
+      if (delta_roll > 180.0f) delta_roll = 360.0f - delta_roll;
+      if (delta_pitch > 180.0f) delta_pitch = 360.0f - delta_pitch;
+      if (delta_yaw > 180.0f) delta_yaw = 360.0f - delta_yaw;
+      
+      // 判断是否有明显的姿态变化
+      bool has_change = (delta_roll > ATTITUDE_CHANGE_THRESHOLD || 
+                         delta_pitch > ATTITUDE_CHANGE_THRESHOLD || 
+                         delta_yaw > ATTITUDE_CHANGE_THRESHOLD);
+      
+      if (has_change) {
+        stability_counter = 0;
+        if (!attitude_change_reported) {
+          printf("[IMU] 检测到姿态数据改变！\n");
+          printf("[IMU] Roll: %.2f -> %.2f | Pitch: %.2f -> %.2f | Yaw: %.2f -> %.2f\n",
+                 last_roll, current_roll, last_pitch, current_pitch, last_yaw, current_yaw);
+          attitude_change_reported = true;
+        }
+      } else {
+        stability_counter++;
+        if (stability_counter >= STABILITY_THRESHOLD) {
+          attitude_change_reported = false;
+        }
+      }
+      
+      // 更新上次角度
+      last_roll = current_roll;
+      last_pitch = current_pitch;
+      last_yaw = current_yaw;
+    }
+    
     if (!get_current_data_mode())
       instance->app_mpu6050_stop(); // 根据数据模式停止或启用模组
     else

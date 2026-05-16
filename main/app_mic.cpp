@@ -201,6 +201,13 @@ void MEMS_MIC::mic_collection_loop() {
     int stats_counter = 0;
     const int STATS_INTERVAL = 160;  // 每160个采样（约10ms）计算一次统计
     
+    // 声音检测相关变量
+    int32_t sound_energy_sum = 0;
+    int sound_energy_counter = 0;
+    const int SOUND_DETECT_INTERVAL = 100;  // 每100个采样检测一次
+    const int SOUND_THRESHOLD = 500;  // 声音检测阈值
+    bool last_sound_detected = false;
+    
     uint32_t start_time = esp_timer_get_time() / 1000;
 
     // 串口打印启动信息
@@ -226,6 +233,25 @@ void MEMS_MIC::mic_collection_loop() {
         if (pcm_sample < min_pcm) min_pcm = pcm_sample;
         if (pcm_sample > max_pcm) max_pcm = pcm_sample;
         stats_counter++;
+        
+        // 声音检测：计算能量（绝对值之和）
+        sound_energy_sum += abs(pcm_sample);
+        sound_energy_counter++;
+        
+        // 每SOUND_DETECT_INTERVAL个采样检测一次声音
+        if (sound_energy_counter >= SOUND_DETECT_INTERVAL) {
+            int32_t avg_energy = sound_energy_sum / sound_energy_counter;
+            bool sound_detected = (avg_energy > SOUND_THRESHOLD);
+            
+            // 如果检测到声音且之前没有检测到
+            if (sound_detected && !last_sound_detected) {
+                printf("[MIC] 成功收录到声音！\n");
+            }
+            
+            last_sound_detected = sound_detected;
+            sound_energy_sum = 0;
+            sound_energy_counter = 0;
+        }
         
         // 每PRINT_INTERVAL个采样打印一次详细数据
         if (print_counter++ >= PRINT_INTERVAL) {

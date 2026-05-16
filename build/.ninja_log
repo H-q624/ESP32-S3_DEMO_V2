@@ -1381,3 +1381,130 @@
 600	733	8005456369849757	C:/Users/zhq/Desktop/esp_imu_sdcard_demo (4)/esp_imu_sdcard_demo/build/bootloader-prefix/src/bootloader-stamp/bootloader-done	8a28cf44ffc4de64
 103	11842250	8005344851299260	CMakeFiles/confserver	b51bde009471a285
 103	11842250	8005344851299260	C:/Users/zhq/Desktop/esp_imu_sdcard_demo (4)/esp_imu_sdcard_demo/build/CMakeFiles/confserver	b51bde009471a285
+210	484	8006123906515501	bootloader-prefix/src/bootloader-stamp/bootloader-build	ec3dab86694d4340
+210	484	8006123906515501	bootloader/bootloader.elf	ec3dab86694d4340
+210	484	8006123906515501	bootloader/bootloader.bin	ec3dab86694d4340
+210	484	8006123906515501	bootloader/bootloader.map	ec3dab86694d4340
+210	484	8006123906515501	C:/Users/zhq/Desktop/esp_imu_sdcard_demo (4)/esp_imu_sdcard_demo/build/bootloader-prefix/src/bootloader-stamp/bootloader-build	ec3dab86694d4340
+210	484	8006123906515501	C:/Users/zhq/Desktop/esp_imu_sdcard_demo (4)/esp_imu_sdcard_demo/build/bootloader/bootloader.elf	ec3dab86694d4340
+210	484	8006123906515501	C:/Users/zhq/Desktop/esp_imu_sdcard_demo (4)/esp_imu_sdcard_demo/build/bootloader/bootloader.bin	ec3dab86694d4340
+210	484	8006123906515501	C:/Users/zhq/Desktop/esp_imu_sdcard_demo (4)/esp_imu_sdcard_demo/build/bootloader/bootloader.map	ec3dab86694d4340
+485	544	8006123909251122	bootloader-prefix/src/bootloader-stamp/bootloader-install	92ff87c77401ae6e
+485	544	8006123909251122	C:/Users/zhq/Desktop/esp_imu_sdcard_demo (4)/esp_imu_sdcard_demo/build/bootloader-prefix/src/bootloader-stamp/bootloader-install	92ff87c77401ae6e
+544	656	8006123910906495	CMakeFiles/bootloader-complete	8a28cf44ffc4de64
+544	656	8006123910906495	bootloader-prefix/src/bootloader-stamp/bootloader-done	8a28cf44ffc4de64
+544	656	8006123910906495	C:/Users/zhq/Desktop/esp_imu_sdcard_demo (4)/esp_imu_sdcard_demo/build/CMakeFiles/bootloader-complete	8a28cf44ffc4de64
+544	656	8006123910906495	C:/Users/zhq/Desktop/esp_imu_sdcard_demo (4)/esp_imu_sdcard_demo/build/bootloader-prefix/src/bootloader-stamp/bootloader-done	8a28cf44ffc4de64
+235	558	8006126691706349	bootloader-prefix/src/bootloader-stamp/bootloader-build	ec3dab86694d4340
+235	558	8006126691706349	bootloader/bootloader.elf	ec3dab86694d4340
+235	558	8006126691706349	bootloader/bootloader.bin	ec3dab86694d4340
+235	558	8006126691706349	bootloader/bootloader.map	ec3dab86694d4340
+235	558	8006126691706349	C:/Users/zhq/Desktop/esp_imu_sdcard_demo (4)/esp_imu_sdcard_demo/build/bootloader-prefix/src/bootloader-stamp/bootloader-build	ec3dab86694d4340
+235	558	8006126691706349	C:/Users/zhq/Desktop/esp_imu_sdcard_demo (4)/esp_imu_sdcard_demo/build/bootloader/bootloader.elf	ec3dab86694d4340
+235	558	8006126691706349	C:/Users/zhq/Desktop/esp_imu_sdcard_demo (4)/esp_imu_sdcard_demo/build/bootloader/bootloader.bin	ec3dab86694d4340
+235	558	8006126691706349	C:/Users/zhq/Desktop/esp_imu_sdcard_demo (4)/esp_imu_sdcard_demo/build/bootloader/bootloader.map	ec3dab86694d4340
+560	643	8006126694947465	bootloader-prefix/src/bootloader-stamp/bootloader-install	92ff87c77401ae6e
+560	643	8006126694947465	C:/Users/zhq/Desktop/esp_imu_sdcard_demo (4)/esp_imu_sdcard_demo/build/bootloader-prefix/src/bootloader-stamp/bootloader-install	92ff87c77401ae6e
+643	1018	8006126699211359	CMakeFiles/bootloader-complete	8a28cf44ffc4de64
+643	1018	8006126699211359	bootloader-prefix/src/bootloader-stamp/bootloader-done	8a28cf44ffc4de64
+643	1018	8006126699211359	C:/Users/zhq/Desktop/esp_imu_sdcard_demo (4)/esp_imu_sdcard_demo/build/CMakeFiles/bootloader-complete	8a28cf44ffc4de64
+643	1018	8006126699211359	C:/Users/zhq/Desktop/esp_imu_sdcard_demo (4)/esp_imu_sdcard_demo/build/bootloader-prefix/src/bootloader-stamp/bootloader-done	8a28cf44ffc4de64
+220	1635	8006126691554516	esp-idf/main/CMakeFiles/__idf_main.dir/app_extflash.cpp.obj	c29e03e8871bec9a
+203	1808	8006126691392928	esp-idf/main/CMakeFiles/__idf_main.dir/main.cpp.obj	95de073cbfe2ea61
+1813	2070	8006126707486425	esp-idf/main/libmain.a	c27aeb56b6c9c9e3
+2070	18142	8006126870107747	esp-idf/esp_system/ld/sections.ld	148cc6133cf1f51a
+2070	18142	8006126870107747	C:/Users/zhq/Desktop/esp_imu_sdcard_demo (4)/esp_imu_sdcard_demo/build/esp-idf/esp_system/ld/sections.ld	148cc6133cf1f51a
+18142	22813	8006126870778354	esp_imu_sdcard_demo.elf	e307bfe6bca20d42
+22813	23250	8006126921750954	.bin_timestamp	503d104be225ed5c
+22813	23250	8006126921750954	C:/Users/zhq/Desktop/esp_imu_sdcard_demo (4)/esp_imu_sdcard_demo/build/.bin_timestamp	503d104be225ed5c
+23250	23379	8006126921851057	esp-idf/esptool_py/CMakeFiles/app_check_size	9fafe3cd2c42279a
+23250	23379	8006126921851057	C:/Users/zhq/Desktop/esp_imu_sdcard_demo (4)/esp_imu_sdcard_demo/build/esp-idf/esptool_py/CMakeFiles/app_check_size	9fafe3cd2c42279a
+217	390	8006127221525951	esp-idf/esptool_py/CMakeFiles/app_check_size	9fafe3cd2c42279a
+217	390	8006127221525951	C:/Users/zhq/Desktop/esp_imu_sdcard_demo (4)/esp_imu_sdcard_demo/build/esp-idf/esptool_py/CMakeFiles/app_check_size	9fafe3cd2c42279a
+201	494	8006127221342412	bootloader-prefix/src/bootloader-stamp/bootloader-build	ec3dab86694d4340
+201	494	8006127221342412	bootloader/bootloader.elf	ec3dab86694d4340
+201	494	8006127221342412	bootloader/bootloader.bin	ec3dab86694d4340
+201	494	8006127221342412	bootloader/bootloader.map	ec3dab86694d4340
+201	494	8006127221342412	C:/Users/zhq/Desktop/esp_imu_sdcard_demo (4)/esp_imu_sdcard_demo/build/bootloader-prefix/src/bootloader-stamp/bootloader-build	ec3dab86694d4340
+201	494	8006127221342412	C:/Users/zhq/Desktop/esp_imu_sdcard_demo (4)/esp_imu_sdcard_demo/build/bootloader/bootloader.elf	ec3dab86694d4340
+201	494	8006127221342412	C:/Users/zhq/Desktop/esp_imu_sdcard_demo (4)/esp_imu_sdcard_demo/build/bootloader/bootloader.bin	ec3dab86694d4340
+201	494	8006127221342412	C:/Users/zhq/Desktop/esp_imu_sdcard_demo (4)/esp_imu_sdcard_demo/build/bootloader/bootloader.map	ec3dab86694d4340
+494	557	8006127224267585	bootloader-prefix/src/bootloader-stamp/bootloader-install	92ff87c77401ae6e
+494	557	8006127224267585	C:/Users/zhq/Desktop/esp_imu_sdcard_demo (4)/esp_imu_sdcard_demo/build/bootloader-prefix/src/bootloader-stamp/bootloader-install	92ff87c77401ae6e
+558	699	8006127226228234	CMakeFiles/bootloader-complete	8a28cf44ffc4de64
+558	699	8006127226228234	bootloader-prefix/src/bootloader-stamp/bootloader-done	8a28cf44ffc4de64
+558	699	8006127226228234	C:/Users/zhq/Desktop/esp_imu_sdcard_demo (4)/esp_imu_sdcard_demo/build/CMakeFiles/bootloader-complete	8a28cf44ffc4de64
+558	699	8006127226228234	C:/Users/zhq/Desktop/esp_imu_sdcard_demo (4)/esp_imu_sdcard_demo/build/bootloader-prefix/src/bootloader-stamp/bootloader-done	8a28cf44ffc4de64
+232	359	8006132037475266	esp-idf/esptool_py/CMakeFiles/app_check_size	9fafe3cd2c42279a
+232	359	8006132037475266	C:/Users/zhq/Desktop/esp_imu_sdcard_demo (4)/esp_imu_sdcard_demo/build/esp-idf/esptool_py/CMakeFiles/app_check_size	9fafe3cd2c42279a
+216	450	8006132037320211	bootloader-prefix/src/bootloader-stamp/bootloader-build	ec3dab86694d4340
+216	450	8006132037320211	bootloader/bootloader.elf	ec3dab86694d4340
+216	450	8006132037320211	bootloader/bootloader.bin	ec3dab86694d4340
+216	450	8006132037320211	bootloader/bootloader.map	ec3dab86694d4340
+216	450	8006132037320211	C:/Users/zhq/Desktop/esp_imu_sdcard_demo (4)/esp_imu_sdcard_demo/build/bootloader-prefix/src/bootloader-stamp/bootloader-build	ec3dab86694d4340
+216	450	8006132037320211	C:/Users/zhq/Desktop/esp_imu_sdcard_demo (4)/esp_imu_sdcard_demo/build/bootloader/bootloader.elf	ec3dab86694d4340
+216	450	8006132037320211	C:/Users/zhq/Desktop/esp_imu_sdcard_demo (4)/esp_imu_sdcard_demo/build/bootloader/bootloader.bin	ec3dab86694d4340
+216	450	8006132037320211	C:/Users/zhq/Desktop/esp_imu_sdcard_demo (4)/esp_imu_sdcard_demo/build/bootloader/bootloader.map	ec3dab86694d4340
+451	515	8006132039665906	bootloader-prefix/src/bootloader-stamp/bootloader-install	92ff87c77401ae6e
+451	515	8006132039665906	C:/Users/zhq/Desktop/esp_imu_sdcard_demo (4)/esp_imu_sdcard_demo/build/bootloader-prefix/src/bootloader-stamp/bootloader-install	92ff87c77401ae6e
+515	628	8006132041372744	CMakeFiles/bootloader-complete	8a28cf44ffc4de64
+515	628	8006132041372744	bootloader-prefix/src/bootloader-stamp/bootloader-done	8a28cf44ffc4de64
+515	628	8006132041372744	C:/Users/zhq/Desktop/esp_imu_sdcard_demo (4)/esp_imu_sdcard_demo/build/CMakeFiles/bootloader-complete	8a28cf44ffc4de64
+515	628	8006132041372744	C:/Users/zhq/Desktop/esp_imu_sdcard_demo (4)/esp_imu_sdcard_demo/build/bootloader-prefix/src/bootloader-stamp/bootloader-done	8a28cf44ffc4de64
+181	427	8006137128970790	bootloader-prefix/src/bootloader-stamp/bootloader-build	ec3dab86694d4340
+181	427	8006137128970790	bootloader/bootloader.elf	ec3dab86694d4340
+181	427	8006137128970790	bootloader/bootloader.bin	ec3dab86694d4340
+181	427	8006137128970790	bootloader/bootloader.map	ec3dab86694d4340
+181	427	8006137128970790	C:/Users/zhq/Desktop/esp_imu_sdcard_demo (4)/esp_imu_sdcard_demo/build/bootloader-prefix/src/bootloader-stamp/bootloader-build	ec3dab86694d4340
+181	427	8006137128970790	C:/Users/zhq/Desktop/esp_imu_sdcard_demo (4)/esp_imu_sdcard_demo/build/bootloader/bootloader.elf	ec3dab86694d4340
+181	427	8006137128970790	C:/Users/zhq/Desktop/esp_imu_sdcard_demo (4)/esp_imu_sdcard_demo/build/bootloader/bootloader.bin	ec3dab86694d4340
+181	427	8006137128970790	C:/Users/zhq/Desktop/esp_imu_sdcard_demo (4)/esp_imu_sdcard_demo/build/bootloader/bootloader.map	ec3dab86694d4340
+428	498	8006137131457491	bootloader-prefix/src/bootloader-stamp/bootloader-install	92ff87c77401ae6e
+428	498	8006137131457491	C:/Users/zhq/Desktop/esp_imu_sdcard_demo (4)/esp_imu_sdcard_demo/build/bootloader-prefix/src/bootloader-stamp/bootloader-install	92ff87c77401ae6e
+498	639	8006137133457246	CMakeFiles/bootloader-complete	8a28cf44ffc4de64
+498	639	8006137133457246	bootloader-prefix/src/bootloader-stamp/bootloader-done	8a28cf44ffc4de64
+498	639	8006137133457246	C:/Users/zhq/Desktop/esp_imu_sdcard_demo (4)/esp_imu_sdcard_demo/build/CMakeFiles/bootloader-complete	8a28cf44ffc4de64
+498	639	8006137133457246	C:/Users/zhq/Desktop/esp_imu_sdcard_demo (4)/esp_imu_sdcard_demo/build/bootloader-prefix/src/bootloader-stamp/bootloader-done	8a28cf44ffc4de64
+153	1572	8006137128688812	esp-idf/main/CMakeFiles/__idf_main.dir/app_mic.cpp.obj	513e390ea4dcefb9
+343	723	8006138502592098	bootloader-prefix/src/bootloader-stamp/bootloader-build	ec3dab86694d4340
+343	723	8006138502592098	bootloader/bootloader.elf	ec3dab86694d4340
+343	723	8006138502592098	bootloader/bootloader.bin	ec3dab86694d4340
+343	723	8006138502592098	bootloader/bootloader.map	ec3dab86694d4340
+343	723	8006138502592098	C:/Users/zhq/Desktop/esp_imu_sdcard_demo (4)/esp_imu_sdcard_demo/build/bootloader-prefix/src/bootloader-stamp/bootloader-build	ec3dab86694d4340
+343	723	8006138502592098	C:/Users/zhq/Desktop/esp_imu_sdcard_demo (4)/esp_imu_sdcard_demo/build/bootloader/bootloader.elf	ec3dab86694d4340
+343	723	8006138502592098	C:/Users/zhq/Desktop/esp_imu_sdcard_demo (4)/esp_imu_sdcard_demo/build/bootloader/bootloader.bin	ec3dab86694d4340
+343	723	8006138502592098	C:/Users/zhq/Desktop/esp_imu_sdcard_demo (4)/esp_imu_sdcard_demo/build/bootloader/bootloader.map	ec3dab86694d4340
+726	805	8006138506433565	bootloader-prefix/src/bootloader-stamp/bootloader-install	92ff87c77401ae6e
+726	805	8006138506433565	C:/Users/zhq/Desktop/esp_imu_sdcard_demo (4)/esp_imu_sdcard_demo/build/bootloader-prefix/src/bootloader-stamp/bootloader-install	92ff87c77401ae6e
+806	1008	8006138509102352	CMakeFiles/bootloader-complete	8a28cf44ffc4de64
+806	1008	8006138509102352	bootloader-prefix/src/bootloader-stamp/bootloader-done	8a28cf44ffc4de64
+806	1008	8006138509102352	C:/Users/zhq/Desktop/esp_imu_sdcard_demo (4)/esp_imu_sdcard_demo/build/CMakeFiles/bootloader-complete	8a28cf44ffc4de64
+806	1008	8006138509102352	C:/Users/zhq/Desktop/esp_imu_sdcard_demo (4)/esp_imu_sdcard_demo/build/bootloader-prefix/src/bootloader-stamp/bootloader-done	8a28cf44ffc4de64
+290	1609	8006138502057278	esp-idf/main/CMakeFiles/__idf_main.dir/main.cpp.obj	95de073cbfe2ea61
+270	1917	8006138501852963	esp-idf/main/CMakeFiles/__idf_main.dir/app_mic.cpp.obj	513e390ea4dcefb9
+309	2102	8006138502245716	esp-idf/main/CMakeFiles/__idf_main.dir/app_file.cpp.obj	d13842b6de295f6d
+326	2437	8006138502407225	esp-idf/main/CMakeFiles/__idf_main.dir/app_mpu6050.cpp.obj	57994161e2ddb888
+2437	2628	8006138523530409	esp-idf/main/libmain.a	c27aeb56b6c9c9e3
+2629	17947	8006138678033427	esp-idf/esp_system/ld/sections.ld	148cc6133cf1f51a
+2629	17947	8006138678033427	C:/Users/zhq/Desktop/esp_imu_sdcard_demo (4)/esp_imu_sdcard_demo/build/esp-idf/esp_system/ld/sections.ld	148cc6133cf1f51a
+17947	22307	8006138678626869	esp_imu_sdcard_demo.elf	e307bfe6bca20d42
+22307	22635	8006138725411631	.bin_timestamp	503d104be225ed5c
+22307	22635	8006138725411631	C:/Users/zhq/Desktop/esp_imu_sdcard_demo (4)/esp_imu_sdcard_demo/build/.bin_timestamp	503d104be225ed5c
+22635	22749	8006138725497286	esp-idf/esptool_py/CMakeFiles/app_check_size	9fafe3cd2c42279a
+22635	22749	8006138725497286	C:/Users/zhq/Desktop/esp_imu_sdcard_demo (4)/esp_imu_sdcard_demo/build/esp-idf/esptool_py/CMakeFiles/app_check_size	9fafe3cd2c42279a
+190	318	8006138927442898	esp-idf/esptool_py/CMakeFiles/app_check_size	9fafe3cd2c42279a
+190	318	8006138927442898	C:/Users/zhq/Desktop/esp_imu_sdcard_demo (4)/esp_imu_sdcard_demo/build/esp-idf/esptool_py/CMakeFiles/app_check_size	9fafe3cd2c42279a
+175	409	8006138927292912	bootloader-prefix/src/bootloader-stamp/bootloader-build	ec3dab86694d4340
+175	409	8006138927292912	bootloader/bootloader.elf	ec3dab86694d4340
+175	409	8006138927292912	bootloader/bootloader.bin	ec3dab86694d4340
+175	409	8006138927292912	bootloader/bootloader.map	ec3dab86694d4340
+175	409	8006138927292912	C:/Users/zhq/Desktop/esp_imu_sdcard_demo (4)/esp_imu_sdcard_demo/build/bootloader-prefix/src/bootloader-stamp/bootloader-build	ec3dab86694d4340
+175	409	8006138927292912	C:/Users/zhq/Desktop/esp_imu_sdcard_demo (4)/esp_imu_sdcard_demo/build/bootloader/bootloader.elf	ec3dab86694d4340
+175	409	8006138927292912	C:/Users/zhq/Desktop/esp_imu_sdcard_demo (4)/esp_imu_sdcard_demo/build/bootloader/bootloader.bin	ec3dab86694d4340
+175	409	8006138927292912	C:/Users/zhq/Desktop/esp_imu_sdcard_demo (4)/esp_imu_sdcard_demo/build/bootloader/bootloader.map	ec3dab86694d4340
+409	471	8006138929638435	bootloader-prefix/src/bootloader-stamp/bootloader-install	92ff87c77401ae6e
+409	471	8006138929638435	C:/Users/zhq/Desktop/esp_imu_sdcard_demo (4)/esp_imu_sdcard_demo/build/bootloader-prefix/src/bootloader-stamp/bootloader-install	92ff87c77401ae6e
+471	589	8006138931370594	CMakeFiles/bootloader-complete	8a28cf44ffc4de64
+471	589	8006138931370594	bootloader-prefix/src/bootloader-stamp/bootloader-done	8a28cf44ffc4de64
+471	589	8006138931370594	C:/Users/zhq/Desktop/esp_imu_sdcard_demo (4)/esp_imu_sdcard_demo/build/CMakeFiles/bootloader-complete	8a28cf44ffc4de64
+471	589	8006138931370594	C:/Users/zhq/Desktop/esp_imu_sdcard_demo (4)/esp_imu_sdcard_demo/build/bootloader-prefix/src/bootloader-stamp/bootloader-done	8a28cf44ffc4de64

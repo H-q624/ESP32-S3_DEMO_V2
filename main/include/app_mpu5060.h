@@ -60,8 +60,8 @@ private:
     mpu6050_handle_t handle;                    // 组件句柄
     mpu6050_euler_angles prev_angles;           // 前一帧欧拉角
     uint32_t prev_timestamp;                    // 上一帧时间戳（ms）
-    mpu6050_processed_data_t data;              // 所有需要传输的数据
 public:
+    mpu6050_processed_data_t data;              // 所有需要传输的数据
 
     APP_MPU6050(const char* tag);  // 构造函数
     APP_MPU6050(mpu6050_acce_fs_t acce_fs,mpu6050_gyro_fs_t gyro_fs,const char* tag);

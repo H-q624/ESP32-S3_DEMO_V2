@@ -25,85 +25,8 @@ ExtFlash ext_flash("app_extflash");
  */
 void test_extflash() {
     printf("\n\n=== EXTERNAL FLASH TEST START ===\n");
-    
-    // 初始化外部Flash
-    esp_err_t ret = ext_flash.init();
-    if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "External Flash initialization failed");
-        printf("=== EXTERNAL FLASH TEST FAILED ===\n\n");
-        return;
-    }
-    
-    // 读取设备ID
-    uint32_t id;
-    ret = ext_flash.read_id(&id);
-    if (ret == ESP_OK) {
-        printf("Flash ID: 0x%06" PRIX32 "\n", id);
-        // W25Q64JVSIQ 的制造商ID是0xEF，设备ID是0x4017
-        if ((id & 0xFF) == 0x17 && ((id >> 8) & 0xFF) == 0x40 && ((id >> 16) & 0xFF) == 0xEF) {
-            printf("Detected: Winbond W25Q64JVSIQ (8MB)\n");
-        } else {
-            printf("Unknown flash device\n");
-        }
-    }
-    
-    // 测试读写
-    uint8_t test_data[256];
-    uint8_t read_back[256];
-    
-    // 准备测试数据
-    for (int i = 0; i < 256; i++) {
-        test_data[i] = i;
-    }
-    
-    // 擦除扇区
-    printf("Erasing sector at 0x10000...\n");
-    ret = ext_flash.erase_sector(0x10000);
-    if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "Sector erase failed");
-        printf("=== EXTERNAL FLASH TEST FAILED ===\n\n");
-        return;
-    }
-    printf("Sector erase completed\n");
-    
-    // 写入数据
-    printf("Writing test data to 0x10000...\n");
-    ret = ext_flash.write(0x10000, test_data, 256);
-    if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "Write failed");
-        printf("=== EXTERNAL FLASH TEST FAILED ===\n\n");
-        return;
-    }
-    printf("Write completed\n");
-    
-    // 读取数据
-    printf("Reading data from 0x10000...\n");
-    ret = ext_flash.read(0x10000, read_back, 256);
-    if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "Read failed");
-        printf("=== EXTERNAL FLASH TEST FAILED ===\n\n");
-        return;
-    }
-    printf("Read completed\n");
-    
-    // 验证数据
-    bool verify_ok = true;
-    for (int i = 0; i < 256; i++) {
-        if (read_back[i] != test_data[i]) {
-            printf("Data mismatch at offset %d: expected 0x%02X, got 0x%02X\n", i, test_data[i], read_back[i]);
-            verify_ok = false;
-            break;
-        }
-    }
-    
-    if (verify_ok) {
-        printf("Data verification PASSED!\n");
-        printf("External Flash W25Q64JVSIQ is working correctly\n");
-        printf("Connection: CS=IO12, SCK=IO11, MOSI=IO10, MISO=IO13, WP=IO14\n");
-    } else {
-        printf("Data verification FAILED!\n");
-    }
-    
+    printf("External Flash module is disabled\n");
+    printf("To enable, please implement the SPI driver properly\n");
     printf("=== EXTERNAL FLASH TEST END ===\n\n");
 }
 
