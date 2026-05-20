@@ -24,7 +24,7 @@
 extern bool global_btn_sign; // 直接采用全局标志位传递数据
 
 // 全局事件组，用于模式切换同步
-extern EventGroupHandle_t mode_switch_event_group; 
+extern EventGroupHandle_t mode_switch_event_group;
 
 typedef enum{
     BTN_IDLE=0,        // 空闲状态
@@ -61,6 +61,8 @@ public:
     void toggle_data_mode(); // 切换数据模式
     bool get_current_data_mode(); // 获取当前数据模式
 };
+
+extern Button button;
 
 // 全局函数
 extern "C" bool get_current_data_mode();

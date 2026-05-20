@@ -9,5 +9,6 @@
   ],
   "idf.customExtraVars": {
     "IDF_TARGET": "esp32s3"
-  }
+  },
+  "deepseek.apiKey": "sk-62e8b188607945b6b50b661a55d37c1d"
 }
