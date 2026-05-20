@@ -95,6 +95,10 @@ bool MEMS_MIC::read_sample_pcm(int16_t *out) {
     }
     int raw = adc_read_raw(adc_handle, adc_channel_num);
     *out = (int16_t)((raw - 2048) * 16);
+    static int call_count = 0;
+    if ((++call_count % 50) == 0) {
+        ESP_LOGI(TAG, "raw_adc=%d, pcm=%d", raw, (int)*out);
+    }
     return true;
 }
 

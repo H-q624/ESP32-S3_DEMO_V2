@@ -16,8 +16,8 @@
 static const char *TAG = "main";
 
 #define SAMPLE_RATE_HZ        50
-#define SAMPLES_PER_UPLOAD    (SAMPLE_RATE_HZ * 20)  /* 1000 = 20 seconds */
-#define UPLOAD_INTERVAL_MS    60000
+#define SAMPLES_PER_UPLOAD    (SAMPLE_RATE_HZ * 10)  /* 500 = 10 seconds */
+#define UPLOAD_INTERVAL_MS    10000
 #define MAX_RETRY_COUNT       3
 #define RETRY_DELAY_MS        2000
 
@@ -235,8 +235,12 @@ static int collect_to_buffers(float *acc_out, float *gyro_out,
     int count = 0;
     const int period_ms = 1000 / SAMPLE_RATE_HZ;
 
-    ESP_LOGI(TAG, "Collecting %d samples (~20s)...", SAMPLES_PER_UPLOAD);
+    ESP_LOGI(TAG, "Collecting %d samples (~10s)...", SAMPLES_PER_UPLOAD);
     uint32_t t0 = (uint32_t)(esp_timer_get_time() / 1000);
+
+    int16_t audio_min = 32767, audio_max = -32768;
+    int64_t audio_sum = 0;
+    int audio_samples = 0;
 
     for (int i = 0; i < SAMPLES_PER_UPLOAD; i++) {
         bool got_imu = false;
@@ -261,6 +265,17 @@ static int collect_to_buffers(float *acc_out, float *gyro_out,
             app_mic_append_sample(pcm);
         }
 
+        /* 每50个样本打印一次音频原始值 */
+        if ((i % 50) == 0) {
+            ESP_LOGI(TAG, "Audio[%d]: %d", i, (int)audio_s);
+        }
+        if (got_mic) {
+            if (audio_s < audio_min) audio_min = audio_s;
+            if (audio_s > audio_max) audio_max = audio_s;
+            audio_sum += audio_s;
+            audio_samples++;
+        }
+
         if (got_imu) {
             int idx = count * 3;
             acc_out[idx]     = ax;
@@ -282,12 +297,21 @@ static int collect_to_buffers(float *acc_out, float *gyro_out,
 
     uint32_t elapsed = (uint32_t)(esp_timer_get_time() / 1000) - t0;
     ESP_LOGI(TAG, "Collection done: %d IMU samples in %lu ms", count, (unsigned long)elapsed);
+
+    /* 音频统计 */
+    if (audio_samples > 0) {
+        ESP_LOGI(TAG, "Audio stats: min=%d, max=%d, avg=%lld, samples=%d",
+                 (int)audio_min, (int)audio_max,
+                 (long long)(audio_sum / audio_samples), audio_samples);
+    } else {
+        ESP_LOGI(TAG, "Audio: no samples collected");
+    }
     return count;
 }
 
 extern "C" void app_main(void) {
     vTaskDelay(pdMS_TO_TICKS(100));
-    ESP_LOGI(TAG, "=== IMU+MIC 20s采集上传系统启动 ===");
+    ESP_LOGI(TAG, "=== IMU+MIC 10s采集上传系统启动 ===");
 
     /* ---- 1. WiFi ---- */
     ESP_LOGI(TAG, "[1/5] 连接 WiFi: 清和科技...");
@@ -364,7 +388,7 @@ extern "C" void app_main(void) {
         fclose(leftover_f);
     }
 
-    ESP_LOGI(TAG, "开始循环: 每60s上传一次(采集~20s), 数据同步写入flash");
+    ESP_LOGI(TAG, "开始循环: 每10s采集上传一次, 数据同步写入flash");
 
     int seq_id = 0;
     while (1) {
