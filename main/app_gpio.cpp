@@ -11,6 +11,7 @@
 
 bool global_btn_sign = false;
 TaskHandle_t gpio_handler = nullptr;
+Button button("app_button");
 
 // 全局事件组定义
 EventGroupHandle_t mode_switch_event_group = nullptr;
@@ -208,7 +209,6 @@ bool Button::get_current_data_mode(){
 * @brief 全局访问函数，获取状态 
 */
 extern "C" bool get_current_data_mode(){
-  extern Button button;
   return button.get_current_data_mode();
 }
 

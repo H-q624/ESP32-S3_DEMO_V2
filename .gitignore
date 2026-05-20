@@ -1,0 +1,8 @@
+build/
+*.bin
+*.elf
+*.map
+*.o
+*.obj
+*.a
+*.rsp
