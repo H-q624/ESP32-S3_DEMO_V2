@@ -240,6 +240,17 @@ esp_err_t app_http_connect_to_server(void) {
 
 
 
+/* 写一个 chunk: <hex_len>\r\n<data>\r\n */
+static esp_err_t http_write_chunk(esp_http_client_handle_t client,
+                                   const char *data, size_t len) {
+    char hdr[16];
+    int hdr_len = snprintf(hdr, sizeof(hdr), "%X\r\n", (unsigned)len);
+    if (esp_http_client_write(client, hdr, hdr_len) < 0) return ESP_FAIL;
+    if (len > 0 && esp_http_client_write(client, data, (int)len) < 0) return ESP_FAIL;
+    if (esp_http_client_write(client, "\r\n", 2) < 0) return ESP_FAIL;
+    return ESP_OK;
+}
+
 esp_err_t app_http_send_data(const char* path, const char* data, size_t data_len) {
 
     if (!s_wifi_connected) {
@@ -272,29 +283,93 @@ esp_err_t app_http_send_data(const char* path, const char* data, size_t data_len
 
     esp_http_client_set_header(s_http_client, "Content-Type", "application/json");
 
-    esp_http_client_set_post_field(s_http_client, data, data_len);
+    esp_http_client_set_header(s_http_client, "Transfer-Encoding", "chunked");
+
+    esp_http_client_set_header(s_http_client, "Connection", "keep-alive");
 
 
 
-    esp_err_t err = esp_http_client_perform(s_http_client);
+    esp_err_t err = esp_http_client_open(s_http_client, 0);
 
-    if (err == ESP_OK) {
+    if (err != ESP_OK) {
 
-        int status_code = esp_http_client_get_status_code(s_http_client);
-
-        ESP_LOGI(TAG, "HTTP OK, status: %d", status_code);
-
-    } else {
-
-        ESP_LOGE(TAG, "HTTP failed: %s", esp_err_to_name(err));
+        ESP_LOGE(TAG, "HTTP open failed: %s", esp_err_to_name(err));
 
         http_client_reconnect();
+
+        return err;
 
     }
 
 
 
-    return err;
+    /* 分块写入, 每块 4KB, 避免大块导致 TCP 窗口阻塞 */
+
+    size_t offset = 0;
+
+    const size_t max_chunk = 4096;
+
+    while (offset < data_len) {
+
+        size_t n = data_len - offset;
+
+        if (n > max_chunk) n = max_chunk;
+
+        if (http_write_chunk(s_http_client, data + offset, n) != ESP_OK) {
+
+            ESP_LOGE(TAG, "Chunk write failed at offset %u", (unsigned)offset);
+
+            esp_http_client_close(s_http_client);
+
+            http_client_reconnect();
+
+            return ESP_FAIL;
+
+        }
+
+        offset += n;
+
+    }
+
+
+
+    /* 结束块 */
+
+    if (http_write_chunk(s_http_client, NULL, 0) != ESP_OK) {
+
+        ESP_LOGE(TAG, "Final chunk write failed");
+
+        esp_http_client_close(s_http_client);
+
+        http_client_reconnect();
+
+        return ESP_FAIL;
+
+    }
+
+
+
+    int content_length = esp_http_client_fetch_headers(s_http_client);
+
+    int status_code = esp_http_client_get_status_code(s_http_client);
+
+    esp_http_client_close(s_http_client);
+
+
+
+    if (status_code > 0) {
+
+        ESP_LOGI(TAG, "HTTP chunked OK, status: %d, resp_len: %d", status_code, content_length);
+
+        return ESP_OK;
+
+    } else {
+
+        ESP_LOGE(TAG, "HTTP chunked failed, status: %d", status_code);
+
+        return ESP_FAIL;
+
+    }
 
 }
 
