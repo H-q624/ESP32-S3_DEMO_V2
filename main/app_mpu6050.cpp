@@ -1,7 +1,5 @@
-#include "app_mpu5060.h"
+#include "app_mpu6050.h"
 #include "driver/gpio.h"
-
-QueueHandle_t data_queue = nullptr;
 #include "driver/i2c.h"
 #include "esp_err.h"
 #include "esp_log.h"
@@ -98,6 +96,7 @@ bool APP_MPU6050::app_mpu6050_init() {
         return false;
       }
       isReady = true;
+      fall_detector.reset_state();
       return true;
     }
 
@@ -126,4 +125,12 @@ bool APP_MPU6050::read_sample(mpu6050_acce_value_t *acc, mpu6050_gyro_value_t *g
     return false;
   }
   return true;
+}
+
+bool APP_MPU6050::detect_fall(const mpu6050_acce_value_t &acc) {
+  return fall_detector.process_100hz_data(acc.acce_x, acc.acce_y, acc.acce_z);
+}
+
+void APP_MPU6050::reset_fall_detector() {
+  fall_detector.reset_state();
 }

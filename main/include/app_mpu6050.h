@@ -16,6 +16,7 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/queue.h"
 #include "mpu6050.h"
+#include "app_fall_new.h"
 
 extern QueueHandle_t data_queue;
 
@@ -42,6 +43,7 @@ private:
     mpu6050_acce_fs_t acce_fs;
     mpu6050_gyro_fs_t gyro_fs;
     mpu6050_handle_t handle;
+    NewFallDetector fall_detector;
 
 public:
     APP_MPU6050(const char *tag);
@@ -51,6 +53,8 @@ public:
     bool app_mpu6050_init();
     bool app_mpu6050_check_module();
     bool read_sample(mpu6050_acce_value_t *acc, mpu6050_gyro_value_t *gyro);
+    bool detect_fall(const mpu6050_acce_value_t &acc);
+    void reset_fall_detector();
 };
 
 #endif

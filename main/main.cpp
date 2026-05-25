@@ -5,8 +5,9 @@
 #include "esp_spiffs.h"
 #include "esp_wifi.h"
 #include "app_wifi.h"
-#include "app_mpu5060.h"
+#include "app_mpu6050.h"
 #include "app_mic.h"
+#include "app_speaker.h"
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -15,8 +16,8 @@
 
 static const char *TAG = "main";
 
-#define SAMPLE_RATE_HZ        50
-#define SAMPLES_PER_UPLOAD    (SAMPLE_RATE_HZ * 10)  /* 500 = 10 seconds */
+#define SAMPLE_RATE_HZ        100
+#define SAMPLES_PER_UPLOAD    (SAMPLE_RATE_HZ * 10)  /* 1000 = 10 seconds */
 #define UPLOAD_INTERVAL_MS    10000
 #define MAX_RETRY_COUNT       3
 #define RETRY_DELAY_MS        2000
@@ -255,6 +256,11 @@ static int collect_to_buffers(float *acc_out, float *gyro_out,
             gy = gyro_sample.gyro_y;
             gz = gyro_sample.gyro_z;
             got_imu = true;
+
+            if (mpu6050->detect_fall(acce)) {
+                ESP_LOGW(TAG, "*** FALL DETECTED at sample %d ***", i);
+                speaker_beep(2000, 500); /* 跌倒报警音 2kHz 500ms */
+            }
         }
 
         int16_t audio_s = 0;
@@ -265,8 +271,14 @@ static int collect_to_buffers(float *acc_out, float *gyro_out,
             app_mic_append_sample(pcm);
         }
 
-        /* 每50个样本打印一次音频原始值 */
+        /* 每50个样本打印一次 IMU + 音频原始值 */
         if ((i % 50) == 0) {
+            if (got_imu) {
+                ESP_LOGI(TAG, "IMU[%d]: acc=(%.3f,%.3f,%.3f) gyro=(%.2f,%.2f,%.2f)",
+                         i, ax, ay, az, gx, gy, gz);
+            } else {
+                ESP_LOGW(TAG, "IMU[%d]: no data", i);
+            }
             ESP_LOGI(TAG, "Audio[%d]: %d", i, (int)audio_s);
         }
         if (got_mic) {

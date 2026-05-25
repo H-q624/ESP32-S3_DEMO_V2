@@ -1,7 +1,7 @@
 #include "app_file.h"
 #include "app_gpio.h"
 #include "app_mic.h"
-#include "app_mpu5060.h"
+#include "app_mpu6050.h"
 #include "esp_err.h"
 #include "esp_log.h"
 #include "esp_spiffs.h"
