@@ -142,24 +142,7 @@ void app_wifi_init_sta(const char* ssid, const char* password) {
 
 
 
-    ESP_LOGI(TAG, "WiFi STA initialized, connecting to %s", ssid);
-
-    int timeout_ms = 30000;
-
-    while (!s_wifi_connected && timeout_ms > 0) {
-
-        vTaskDelay(500 / portTICK_PERIOD_MS);
-
-        timeout_ms -= 500;
-
-    }
-
-    if (!s_wifi_connected) {
-
-        ESP_LOGW(TAG, "WiFi connection timeout (30s), continuing anyway");
-
-    }
-
+    ESP_LOGI(TAG, "WiFi STA initialized, connecting to %s (async)", ssid);
 }
 
 

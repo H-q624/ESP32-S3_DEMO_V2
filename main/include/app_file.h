@@ -1,7 +1,7 @@
 #ifndef _APP_FILE_H_
 #define _APP_FILE_H_
 
-#include "app_mpu5060.h"
+#include "app_mpu6050.h"
 #include "app_mic.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
