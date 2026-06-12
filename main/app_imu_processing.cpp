@@ -1,10 +1,8 @@
 /*
  * app_imu_processing.cpp
  *
- * Standalone IMU signal-processing routines, NOT linked into the main build.
- * To use: add this file to CMakeLists.txt SRCS and #include "app_imu_processing.h".
- *
- * Algorithms extracted from app_mpu6050_old.cpp:
+ * Standalone IMU signal-processing routines.
+ * Algorithms:
  *   - Moving-average filter (accel + gyro, circular buffer)
  *   - Combined magnitude computation
  *   - Complementary-filter attitude (roll / pitch / yaw)

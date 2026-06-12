@@ -4,6 +4,7 @@
 #include <stddef.h>
 #include <string.h>
 #include <stdint.h>
+#include <stdbool.h>
 #include "esp_err.h"
 
 #ifdef __cplusplus
@@ -15,27 +16,52 @@ extern "C" {
 #define HTTP_PORT 8007
 #define MQTT_PORT 1883
 
-// 设备配置
-#define DEVICE_ID "CARD_001"
-#define DEVICE_IMEI "CARD360005000"
+/* HTTP 上传路径 (与服务器协议一致) */
+#define HTTP_PATH_DATA     "/api/data"
+#define HTTP_PATH_ALARM    "/api/alarm"
+#define HTTP_PATH_MESSAGE  "/api/message"
 
-/* 与 IMU 同步上传的音频采样率（app_mic 模块） */
+/* IMU 采样率 / 音频 PCM 采样率 */
+#define IMU_SAMPLE_RATE_HZ     50
+#define AUDIO_PCM_SAMPLE_RATE  16000
+
+// 设备配置 (ICCID 运行时从 ML307R 读取, 此为 fallback)
+#define DEVICE_ID "898604293624D0028511"
+#define DEVICE_IMEI "898604293624D0028511"
+
+const char *app_get_device_id(void);
+
+/* 与 IMU 同步降采样后的上传音频包采样率 (非 PCM 原始采样率) */
 #ifndef MIC_UPLOAD_SAMPLE_RATE
-#define MIC_UPLOAD_SAMPLE_RATE 50
+#define MIC_UPLOAD_SAMPLE_RATE IMU_SAMPLE_RATE_HZ
 #endif
 
+/* 网络模式选择 */
+typedef enum {
+    NET_MODE_WIFI = 0,
+    NET_MODE_ML307R = 1,  /* 4G 模组 */
+} network_mode_t;
+
 /**
- * @brief Initialize WiFi station mode and connect to AP
- * 
- * @param ssid WiFi SSID
- * @param password WiFi password
+ * @brief 统一网络初始化 (自动选择 WiFi 或 ML307R)
+ * @param mode   网络模式
+ * @param param1 WiFi: ssid / ML307R: 不使用
+ * @param param2 WiFi: password / ML307R: 不使用
+ */
+void app_network_init(network_mode_t mode, const char* param1, const char* param2);
+
+/**
+ * @brief 检查当前网络是否已连接
+ */
+bool app_network_is_connected(void);
+
+/**
+ * @brief [兼容] Initialize WiFi station mode and connect to AP
  */
 void app_wifi_init_sta(const char* ssid, const char* password);
 
 /**
- * @brief Connect to HTTP server and send test request
- * 
- * @return esp_err_t ESP_OK on success
+ * @brief [兼容] Connect to HTTP server and send test request
  */
 esp_err_t app_http_connect_to_server();
 

@@ -1,4 +1,5 @@
 build/
+build_full_output.txt
 *.bin
 *.elf
 *.map
@@ -6,3 +7,4 @@ build/
 *.obj
 *.a
 *.rsp
+.cache/

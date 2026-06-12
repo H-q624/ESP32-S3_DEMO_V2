@@ -10,8 +10,10 @@
 #define I2C_MASTER_FREQ_HZ          CONFIG_I2C_MASTER_FREQUENCY
 #define I2C_MASTER_TIMEOUT_MS       1000
 #define MPU6050_INT_GPIO            CONFIG_MPU6050_INT_PIN
-/* 部分国产克隆 MPU6050 返回 0x98，功能与 0x68 兼容 */
+/* 部分国产克隆 / 兼容芯片 WHO_AM_I 非 0x68 */
 #define MPU6050_WHO_AM_I_CLONE_VAL  0x98
+#define MPU6050_WHO_AM_I_ALT_VAL    0x60
+#define MPU9250_WHO_AM_I_VAL        0x71
 
 #include "freertos/FreeRTOS.h"
 #include "freertos/queue.h"

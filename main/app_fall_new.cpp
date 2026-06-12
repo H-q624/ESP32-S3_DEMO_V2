@@ -5,11 +5,9 @@ NewFallDetector::NewFallDetector(float thresh) : threshold(thresh) {
 }
 
 float NewFallDetector::process_sos(float input, BiquadState* state) {
-    // 第一级
     float v_1 = input - a1_1 * state[0].v1 - a2_1 * state[0].v2;
     float y_1 = b0_1 * v_1 + b1_1 * state[0].v1 + b2_1 * state[0].v2;
     state[0].v2 = state[0].v1; state[0].v1 = v_1;
-    // 第二级
     float v_2 = y_1 - a1_2 * state[1].v1 - a2_2 * state[1].v2;
     float y_2 = b0_2 * v_2 + b1_2 * state[1].v1 + b2_2 * state[1].v2;
     state[1].v2 = state[1].v1; state[1].v1 = v_2;
@@ -29,8 +27,7 @@ void NewFallDetector::reset_state() {
     for(int i = 0; i < 2; i++) {
         sos_x[i] = {0, 0}; sos_y[i] = {0, 0}; sos_z[i] = {0, 0};
     }
-    
-    // 初始化滤波器平稳状态
+
     for(int i = 0; i < 50; i++) {
         process_sos(0.0f, sos_x);
         process_sos(-256.0f, sos_y);
@@ -42,14 +39,14 @@ void NewFallDetector::reset_state() {
     decimation_counter = 0;
 }
 
-bool NewFallDetector::process_100hz_data(float ax_g, float ay_g, float az_g) {
+bool NewFallDetector::process_sample(float ax_g, float ay_g, float az_g) {
+    /* 50Hz 输入, 降采样 2 -> 25Hz (与 FS=25 一致) */
     decimation_counter++;
-    if (decimation_counter < 4) return false;
+    if (decimation_counter < 2) return false;
     decimation_counter = 0;
 
-    // 转换为数据集尺度，且反转 Y 轴
     float d_x = ax_g * 256.0f;
-    float d_y = -ay_g * 256.0f; 
+    float d_y = -ay_g * 256.0f;
     float d_z = az_g * 256.0f;
 
     float fx = process_sos(d_x, sos_x);
@@ -58,7 +55,7 @@ bool NewFallDetector::process_100hz_data(float ax_g, float ay_g, float az_g) {
 
     float j1 = sqrtf(powf(fx - prev_accel[0], 2) + powf(fy - prev_accel[1], 2) + powf(fz - prev_accel[2], 2));
     prev_accel[0] = fx; prev_accel[1] = fy; prev_accel[2] = fz;
-    
+
     j1_window.push(j1);
     float max_j1 = 0.0f;
     for(int i = 0; i < j1_window.size(); i++) {
@@ -93,7 +90,7 @@ bool NewFallDetector::process_100hz_data(float ax_g, float ay_g, float az_g) {
             sum_x += v.x; sum_y += v.y; sum_z += v.z;
         }
         float mean_x = sum_x/WINDOW_SIZE_DETECTOR, mean_y = sum_y/WINDOW_SIZE_DETECTOR, mean_z = sum_z/WINDOW_SIZE_DETECTOR;
-        
+
         float var_x = 0, var_y = 0, var_z = 0;
         for(int i = 0; i < WINDOW_SIZE_DETECTOR; i++) {
             Vec3 v = x_states_window.get(i);
@@ -101,11 +98,11 @@ bool NewFallDetector::process_100hz_data(float ax_g, float ay_g, float az_g) {
             var_y += powf(v.y - mean_y, 2);
             var_z += powf(v.z - mean_z, 2);
         }
-        
+
         float std_x = sqrtf(var_x/WINDOW_SIZE_DETECTOR);
         float std_y = sqrtf(var_y/WINDOW_SIZE_DETECTOR);
         float std_z = sqrtf(var_z/WINDOW_SIZE_DETECTOR);
-        
+
         float current_j2_norm = sqrtf((powf(std_x, 2) + powf(std_y, 2) + powf(std_z, 2)) / 3.0f);
         j2_window.push(current_j2_norm);
 
@@ -131,11 +128,11 @@ bool NewFallDetector::process_100hz_data(float ax_g, float ay_g, float az_g) {
             for(int i = 1; i < x4_history.size(); i++) {
                 if (x4_history.get(i-1) * x4_history.get(i) < 0) zero_crossings++;
             }
-            suspect_fall = false; 
+            suspect_fall = false;
             wait_counter = 0;
-            
+
             if (zero_crossings < 4) {
-                return true; 
+                return true;
             }
         }
     }

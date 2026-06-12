@@ -7,69 +7,252 @@ menu "App Demo Configuration"
             int "SCL GPIO Num"
             default 5
             help
-                GPIO number for I2C Master clock line.
+                GPIO number for I2C Master clock line (MPU9250 SCL = IO5).
 
         config I2C_MASTER_SDA
             int "SDA GPIO Num"
             default 4
             help
-                GPIO number for I2C Master data line.
+                GPIO number for I2C Master data line (MPU9250 SDA = IO4).
 
         config MPU6050_INT_PIN
             int "MPU6050 INT GPIO Num"
-            default 35
+            default 2
             help
-                GPIO number for MPU6050 interrupt pin.
+                MPU6050/9250 interrupt (schematic MPU9250-INT = IO2).
 
         config I2C_MASTER_FREQUENCY
             int "Master Frequency"
-            default 400000
+            default 100000
             help
-                I2C Speed of Master device.
+                I2C speed (100kHz recommended for stable IMU init).
     endmenu
-    menu "I2S MEMS MIC Configuration"
+
+    menu "I2S MEMS MIC Configuration (SPH0645)"
         config MIC_SAMPLE_RATE
             int "Audio Sample Rate"
             default 16000
             help
-                Set the audio sample rate frequency. Usually 16000 or 44100 Hz if PCM data format supported.
-            
-        config MIC_I2S_DATA_GPIO
-            int "I2S Data GPIO"
-            default 2
-            help 
-                Set the GPIO number used for transmitting/receiving data from I2S. Connect to MIC_SD.
-        
+                SPH0645 I2S sample rate (16000 Hz).
+
+        config MIC_I2S_WS_GPIO
+            int "I2S WS GPIO (Word Select)"
+            default 15
+            help
+                SPH0645 WS pin (IO15).
+
         config MIC_I2S_CLK_GPIO
-            int "I2S Clock GPIO"
-            default 4
+            int "I2S BCLK GPIO"
+            default 16
             help
-                Set the GPIO number used for the clock line from I2S.Connect to MIC_SCK
-               
-        config MIC_I2C_WS_GPIO
-            int "Data Select GPIO"
-            default 10
-            help
-                Set the GPIO numbet used for the data selection line. Connect to MIC_WS
-            
-            
-            
-    endmenu
-    menu "GPIO Configuration"
-        config BTN_PIN_IO
-            int "GPIO PIN For Button"
-            default 9
-            help
-                GPIO pin for extern button
-        config BEEP_PIN_IO
-            int "GPIO PIN For Buzzer"
+                SPH0645 BCLK pin (IO16).
+
+        config MIC_I2S_DATA_GPIO
+            int "I2S DATA GPIO (DataOut)"
             default 3
             help
-                GPIO pin for extern buzzer
+                SPH0645 DataOut pin (IO3).
+    endmenu
+
+    menu "Battery Configuration"
+        config BATTERY_ADC_GPIO
+            int "Battery ADC GPIO (BATTERY_ADC)"
+            default 7
+            help
+                Battery voltage ADC pin after 10K/10K divider (IO7 = BATTERY_ADC).
+
+        config BATTERY_LED1_GPIO
+            int "Battery Level LED 1 GPIO (lowest)"
+            default 46
+            help
+                First battery LED, common-anode (active LOW).
+
+        config BATTERY_LED2_GPIO
+            int "Battery Level LED 2 GPIO"
+            default 47
+
+        config BATTERY_LED3_GPIO
+            int "Battery Level LED 3 GPIO (highest)"
+            default 48
+
+        config BATTERY_VOLT_EMPTY_MV
+            int "Battery Empty Voltage (mV)"
+            default 3300
+            help
+                Single-cell Li-ion empty threshold before first LED.
+
+        config BATTERY_LED2_MV
+            int "Battery LED2 Threshold (mV)"
+            default 3600
+
+        config BATTERY_LED3_MV
+            int "Battery LED3 Threshold (mV)"
+            default 3900
+
+        config BATTERY_VOLT_FULL_MV
+            int "Battery Full Voltage (mV)"
+            default 4200
+    endmenu
+
+    menu "GPIO Configuration"
+        config BTN_PIN_IO
+            int "GPIO PIN For Legacy Button"
+            default 9
+            help
+                Legacy button pin (unused in current main flow).
+
+        config BEEP_PIN_IO
+            int "GPIO PIN For Buzzer"
+            default -1
+            help
+                Buzzer GPIO (-1=disabled). Do NOT use IO3 (MIC DATAOUT).
+
         config LED_PIN_IO
-            int "GPIO PIN For LED"
+            int "GPIO PIN For LED 1"
+            default 47
+            help
+                Status LED 1 (IO47).
+
+        config LED2_PIN_IO
+            int "GPIO PIN For LED 2"
+            default 48
+            help
+                Status LED 2 (IO48).
+    endmenu
+
+    menu "Speaker (NS4150B Class-D)"
+        config SPEAKER_ENABLE
+            bool "Enable speaker driver"
+            default y
+            help
+                NS4150B analog input on OUTP (default IO10). Uses LEDC PWM.
+
+        config SPEAKER_GPIO
+            int "Speaker PWM GPIO (OUTP -> NS4150 INP)"
+            default 10
+            depends on SPEAKER_ENABLE
+            help
+                Schematic: ESP OUTP -> NS4150 INP. Conflicts with EXTFLASH_CLK if same pin.
+
+        config SPEAKER_PWM_FREQ_HZ
+            int "PWM carrier frequency (Hz)"
+            default 32000
+            range 16000 64000
+            depends on SPEAKER_ENABLE
+
+        config SPEAKER_SAMPLE_RATE
+            int "PCM sample rate (Hz)"
+            default 16000
+            range 8000 22050
+            depends on SPEAKER_ENABLE
+    endmenu
+
+    menu "GPS Configuration"
+        config GPS_ENABLE
+            bool "Enable GPS module"
+            default n
+            help
+                Disable to skip GPS init and use lat/lng=0 during upload.
+
+        config GPS_UART_TX_PIN
+            int "GPS UART TX Pin (ESP -> GPS RXD)"
+            default 36
+            help
+                ESP32-S3 TX to GPS RXD (GPS_TXD0 = IO36).
+
+        config GPS_UART_RX_PIN
+            int "GPS UART RX Pin (ESP <- GPS TXD)"
+            default 37
+            help
+                ESP32-S3 RX from GPS TXD (GPS_RXD0 = IO37).
+
+        config GPS_ON_OFF_PIN
+            int "GPS ON/OFF Pin"
             default 1
-            help 
-                GPIO pin for extern led light
+            help
+                GPS module enable (ON/OFF_GPS = IO1).
+
+        config GPS_RST_PIN
+            int "GPS RESET Pin"
+            default 39
+            help
+                GPS hardware reset (RST = IO39).
+
+        config GPS_1PPS_PIN
+            int "GPS 1PPS Pulse Pin"
+            default 38
+            help
+                GPS 1PPS input (1PPS = IO38).
+
+        config GPS_UART_BAUDRATE
+            int "GPS UART Baud Rate"
+            default 9600
+            help
+                GPS module UART baud rate.
+    endmenu
+
+    config COLLECT_DURATION_SEC
+        int "IMU/audio collect duration per round (seconds)"
+        default 60
+        range 5 120
+        help
+            Duration of each collect round. Use 10 for quick testing.
+
+    menu "Key Configuration"
+        config KEY_SW1_PIN
+            int "SW1 Key GPIO (Function Key 1)"
+            default 41
+        config KEY_SW3_PIN
+            int "SW3 Key GPIO (Function Key 2)"
+            default 40
+        config KEY_SW6_PIN
+            int "SW6 Privacy Switch GPIO"
+            default 45
+            help
+                Privacy mode toggle (YSSW = IO45 on schematic v3.0).
+    endmenu
+
+    menu "ML307R 4G Module Configuration"
+        config ML307R_UART_TX_PIN
+            int "ML307R UART TX Pin (ESP -> ML307R RX)"
+            default 17
+        config ML307R_UART_RX_PIN
+            int "ML307R UART RX Pin (ESP <- ML307R TX)"
+            default 18
+        config ML307R_PWR_PIN
+            int "ML307R PWR_ON/OFF Pin"
+            default 7
+            help
+                ML307R PWRKEY (schematic IO7). Active-low pulse >=1.2s to power on.
+                Same pin as battery ADC: 4G boots first, then ADC reclaims the pin.
+        config ML307R_RST_PIN
+            int "ML307R RESET Pin"
+            default 8
+            help
+                ML307R hardware reset (IO8).
+        config ML307R_BAUDRATE
+            int "ML307R UART Baud Rate"
+            default 115200
+        config ML307R_APN
+            string "ML307R APN"
+            default "cmnet"
+    endmenu
+
+    menu "External Flash W25Q64 Configuration"
+        config EXTFLASH_ENABLE
+            bool "Enable external SPI Flash (W25Q64)"
+            default y
+        config EXTFLASH_CS_PIN
+            int "SPI CS Pin"
+            default 9
+        config EXTFLASH_CLK_PIN
+            int "SPI CLK Pin"
+            default 10
+        config EXTFLASH_MOSI_PIN
+            int "SPI MOSI Pin (DI)"
+            default 12
+        config EXTFLASH_MISO_PIN
+            int "SPI MISO Pin (DO)"
+            default 13
     endmenu
 endmenu

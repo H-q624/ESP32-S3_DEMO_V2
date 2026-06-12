@@ -2,10 +2,9 @@
 #define APP_IMU_PROCESSING_H
 
 /*
- * Standalone IMU signal-processing library extracted from app_mpu6050_old.cpp.
- * Not compiled into the main build (not listed in CMakeLists.txt).
- * Include / link only when you want to reuse moving-average filtering,
- * complementary-filter attitude estimation, or the legacy fall pre-detector.
+ * Standalone IMU signal-processing library.
+ * Includes moving-average filtering, complementary-filter attitude estimation,
+ * and legacy fall pre-detector.
  */
 
 #include <stdint.h>
@@ -40,15 +39,12 @@ class ImuProcessor {
 public:
     ImuProcessor();
 
-    /* Feed one raw sample; updates internal filtered data. */
     void update(const mpu6050_acce_value_t &acce,
                 const mpu6050_gyro_value_t &gyro,
                 uint32_t timestamp_ms);
 
-    /* Returns the most recently computed processed data. */
     const imu_processed_data_t &get_data() const { return data; }
 
-    /* Legacy threshold-based fall pre-detector (3-condition AND). */
     bool fall_pre_detect();
 
 private:

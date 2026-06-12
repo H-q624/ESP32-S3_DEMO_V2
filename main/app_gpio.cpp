@@ -7,7 +7,8 @@
 #include "soc/gpio_num.h"
 
 #define GPIO_PIN_MASK_IN (1ULL << GPIO_PIN_BTN)
-#define GPIO_PIN_MASK_OUT (1ULL << GPIO_PIN_BEEP)|(1ULL << GPIO_PIN_LED)
+#define GPIO_PIN_MASK_OUT ((1ULL << GPIO_PIN_LED) | \
+    ((GPIO_PIN_BEEP >= 0) ? (1ULL << GPIO_PIN_BEEP) : 0ULL))
 
 bool global_btn_sign = false;
 TaskHandle_t gpio_handler = nullptr;
@@ -215,8 +216,88 @@ extern "C" bool get_current_data_mode(){
 /*********************** BEEP ************************/
 // 初始化在app_btn_init中一起完成
 void set_buzzer_on(){
+  if (GPIO_PIN_BEEP < 0) return;
   gpio_set_level((gpio_num_t)GPIO_PIN_BEEP, 1);
 }
 void set_buzzer_off(){
+  if (GPIO_PIN_BEEP < 0) return;
   gpio_set_level((gpio_num_t)GPIO_PIN_BEEP, 0);
+}
+
+/*********************** 多按键支持 ************************/
+/*
+ * SW1 → IO41 (功能键1, 低电平有效, 内部上拉)
+ * SW3 → IO40 (功能键2, 低电平有效, 内部上拉)
+ * SW6 → IO45 (隐私模式拨动开关, 高=隐私开, 低=隐私关, 内部下拉)
+ */
+
+static int s_sw1_last = 1;
+static int s_sw3_last = 1;
+
+void app_keys_init(void) {
+    /* SW1 + SW3: 按键输入, 上拉, 按下为低 */
+    gpio_config_t key_cfg = {
+        .pin_bit_mask = (1ULL << GPIO_KEY_SW1) | (1ULL << GPIO_KEY_SW3),
+        .mode         = GPIO_MODE_INPUT,
+        .pull_up_en   = GPIO_PULLUP_ENABLE,
+        .pull_down_en = GPIO_PULLDOWN_DISABLE,
+        .intr_type    = GPIO_INTR_DISABLE,
+    };
+    gpio_config(&key_cfg);
+
+    /* SW6: 隐私模式拨动开关, 下拉, 拨到ON为高 */
+    gpio_config_t sw6_cfg = {
+        .pin_bit_mask = (1ULL << GPIO_KEY_SW6),
+        .mode         = GPIO_MODE_INPUT,
+        .pull_up_en   = GPIO_PULLUP_DISABLE,
+        .pull_down_en = GPIO_PULLDOWN_ENABLE,
+        .intr_type    = GPIO_INTR_DISABLE,
+    };
+    gpio_config(&sw6_cfg);
+
+    s_sw1_last = gpio_get_level((gpio_num_t)GPIO_KEY_SW1);
+    s_sw3_last = gpio_get_level((gpio_num_t)GPIO_KEY_SW3);
+
+    ESP_LOGI("KEYS", "Keys ready: SW1=IO%d, SW3=IO%d, SW6(隐私)=IO%d",
+             GPIO_KEY_SW1, GPIO_KEY_SW3, GPIO_KEY_SW6);
+}
+
+/* SW1 短按检测 (下降沿触发, 调用一次返回1, 之后清0) */
+int app_key_sw1_pressed(void) {
+    int cur = gpio_get_level((gpio_num_t)GPIO_KEY_SW1);
+    int pressed = (s_sw1_last == 1 && cur == 0);
+    s_sw1_last = cur;
+    return pressed;
+}
+
+/* SW3 短按检测 */
+int app_key_sw3_pressed(void) {
+    int cur = gpio_get_level((gpio_num_t)GPIO_KEY_SW3);
+    int pressed = (s_sw3_last == 1 && cur == 0);
+    s_sw3_last = cur;
+    return pressed;
+}
+
+/* SW6 隐私模式: 高电平 = 隐私开启 */
+bool app_key_privacy_mode(void) {
+    return gpio_get_level((gpio_num_t)GPIO_KEY_SW6) == 1;
+}
+
+void app_led_init(void) {
+    gpio_config_t cfg = {
+        .pin_bit_mask = (1ULL << GPIO_PIN_LED) | (1ULL << GPIO_PIN_LED2),
+        .mode         = GPIO_MODE_OUTPUT,
+        .pull_up_en   = GPIO_PULLUP_DISABLE,
+        .pull_down_en = GPIO_PULLDOWN_DISABLE,
+        .intr_type    = GPIO_INTR_DISABLE,
+    };
+    gpio_config(&cfg);
+    gpio_set_level((gpio_num_t)GPIO_PIN_LED, 0);
+    gpio_set_level((gpio_num_t)GPIO_PIN_LED2, 0);
+    ESP_LOGI("LED", "LED ready: LED1=IO%d LED2=IO%d", GPIO_PIN_LED, GPIO_PIN_LED2);
+}
+
+void app_led_set(int led_index, bool on) {
+    gpio_num_t pin = (led_index == 0) ? (gpio_num_t)GPIO_PIN_LED : (gpio_num_t)GPIO_PIN_LED2;
+    gpio_set_level(pin, on ? 1 : 0);
 }

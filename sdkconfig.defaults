@@ -1,0 +1,2 @@
+# PSRAM: only enable for ESP32-S3-WROOM-1-N16R8 (8MB Octal PSRAM).
+# This board uses N16 without PSRAM — keep SPIRAM disabled.

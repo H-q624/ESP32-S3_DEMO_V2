@@ -1,4 +1,5 @@
 #include "app_wifi.h"
+#include "app_ml307r.h"
 
 #include "esp_wifi.h"
 
@@ -22,9 +23,27 @@ static const char *TAG = "app_wifi";
 
 
 
+/* ---- 网络模式 (运行时切换) ---- */
+static network_mode_t s_net_mode = NET_MODE_WIFI;
+
 static bool s_wifi_connected = false;
 
 static esp_http_client_handle_t s_http_client = NULL;
+
+static char s_device_id[32] = DEVICE_ID;
+
+const char *app_get_device_id(void) {
+    return s_device_id;
+}
+
+static void app_set_device_id_from_modem(void) {
+    char iccid[32] = {0};
+    if (ml307r_get_iccid(iccid, sizeof(iccid))) {
+        strncpy(s_device_id, iccid, sizeof(s_device_id) - 1);
+        s_device_id[sizeof(s_device_id) - 1] = '\0';
+        ESP_LOGI(TAG, "Device ID from eSIM ICCID: %s", s_device_id);
+    }
+}
 
 
 
@@ -147,6 +166,70 @@ void app_wifi_init_sta(const char* ssid, const char* password) {
 
 
 
+/* ================================================================
+
+ *  统一网络接口 (app_network_*)
+
+ *  根据 s_net_mode 自动选择 WiFi 或 ML307R
+
+ * ================================================================ */
+
+void app_network_init(network_mode_t mode, const char* param1, const char* param2) {
+
+    s_net_mode = mode;
+
+    if (mode == NET_MODE_ML307R) {
+
+        ESP_LOGI(TAG, "Network mode: ML307R 4G");
+
+        if (ml307r_init() != ESP_OK) {
+
+            ESP_LOGE(TAG, "ML307R init failed");
+
+            return;
+
+        }
+
+        ml307r_power_on();
+
+        if (!ml307r_is_alive()) {
+            ESP_LOGE(TAG, "ML307R not responding, skip network wait");
+            return;
+        }
+
+        /* 阻塞等待注网 (最多 60s) */
+
+        if (!ml307r_wait_network(ML307R_NETWORK_TIMEOUT_MS)) {
+            ESP_LOGW(TAG, "4G network registration timeout, will retry on upload");
+        }
+        app_set_device_id_from_modem();
+
+    } else {
+
+        ESP_LOGI(TAG, "Network mode: WiFi");
+
+        app_wifi_init_sta(param1, param2);
+
+    }
+
+}
+
+
+
+bool app_network_is_connected(void) {
+
+    if (s_net_mode == NET_MODE_ML307R) {
+
+        return ml307r_is_connected();
+
+    }
+
+    return s_wifi_connected;
+
+}
+
+
+
 static esp_err_t http_client_reconnect(void) {
 
     if (s_http_client) {
@@ -205,6 +288,14 @@ static esp_err_t http_client_reconnect(void) {
 
 esp_err_t app_http_connect_to_server(void) {
 
+    if (s_net_mode == NET_MODE_ML307R) {
+
+        ESP_LOGI(TAG, "HTTP server (ML307R): %s:%d", SERVER_IP, HTTP_PORT);
+
+        return ESP_OK; /* ML307R 在发送时才建立连接 */
+
+    }
+
     if (!s_wifi_connected) {
 
         ESP_LOGE(TAG, "WiFi not connected");
@@ -236,6 +327,12 @@ static esp_err_t http_write_chunk(esp_http_client_handle_t client,
 
 esp_err_t app_http_send_data(const char* path, const char* data, size_t data_len) {
 
+    /* ML307R 4G 模式: 使用 AT 指令 HTTP POST */
+    if (s_net_mode == NET_MODE_ML307R) {
+        return ml307r_http_post(path, data, data_len);
+    }
+
+    /* WiFi 模式: 使用原有 esp_http_client */
     if (!s_wifi_connected) {
 
         ESP_LOGE(TAG, "WiFi not connected");
@@ -449,15 +546,10 @@ char *encode_audio_base64(const int16_t *audio_data, int audio_samples) {
 
 
 static void add_audio_format(cJSON *parent) {
-
     cJSON *fmt = cJSON_CreateObject();
-
-    cJSON_AddNumberToObject(fmt, "sr", MIC_UPLOAD_SAMPLE_RATE);
-
+    cJSON_AddNumberToObject(fmt, "sr", AUDIO_PCM_SAMPLE_RATE);
     cJSON_AddNumberToObject(fmt, "bit", 16);
-
     cJSON_AddItemToObject(parent, "audio_format", fmt);
-
 }
 
 
@@ -485,26 +577,15 @@ esp_err_t app_http_send_alarm(int event_id, uint64_t timestamp, int battery,
 
 
     cJSON_AddStringToObject(root, "type", "alarm");
-
     cJSON_AddNumberToObject(root, "event_id", event_id);
-
-    cJSON_AddStringToObject(root, "device_id", DEVICE_ID);
-
+    cJSON_AddStringToObject(root, "device_id", app_get_device_id());
     cJSON_AddNumberToObject(root, "timestamp", (double)timestamp);
-
     cJSON_AddNumberToObject(root, "battery", battery);
-
-    add_location(root, lat, lng);
-
     cJSON_AddNumberToObject(root, "status_confirm", status_confirm);
 
-
-
     cJSON *payload = cJSON_CreateObject();
-
     cJSON *snapshot = cJSON_CreateObject();
-
-    cJSON_AddNumberToObject(snapshot, "freq", 50);
+    cJSON_AddNumberToObject(snapshot, "freq", IMU_SAMPLE_RATE_HZ);
 
 
 
@@ -535,10 +616,10 @@ esp_err_t app_http_send_alarm(int event_id, uint64_t timestamp, int battery,
     }
 
     cJSON_AddItemToObject(snapshot, "baro", baro);
-
     cJSON_AddItemToObject(payload, "sensor_snapshot", snapshot);
 
-
+    /* location 在 payload 内, 不在根节点 */
+    add_location(payload, lat, lng);
 
     char *audio_b64 = encode_audio_base64(audio_data, audio_len);
 
@@ -559,8 +640,7 @@ esp_err_t app_http_send_alarm(int event_id, uint64_t timestamp, int battery,
 
 
     char url[128];
-
-    snprintf(url, sizeof(url), "http://%s:%d/api/alarm", SERVER_IP, HTTP_PORT);
+    snprintf(url, sizeof(url), "http://%s:%d%s", SERVER_IP, HTTP_PORT, HTTP_PATH_ALARM);
 
     char *json_str = cJSON_PrintUnformatted(root);
 
@@ -593,8 +673,7 @@ esp_err_t app_http_send_message(uint64_t timestamp, int battery, double lat, dou
 
 
     cJSON_AddStringToObject(root, "type", "message");
-
-    cJSON_AddStringToObject(root, "device_id", DEVICE_ID);
+    cJSON_AddStringToObject(root, "device_id", app_get_device_id());
 
     cJSON_AddNumberToObject(root, "timestamp", (double)timestamp);
 
@@ -623,8 +702,7 @@ esp_err_t app_http_send_message(uint64_t timestamp, int battery, double lat, dou
 
 
     char url[128];
-
-    snprintf(url, sizeof(url), "http://%s:%d/api/message", SERVER_IP, HTTP_PORT);
+    snprintf(url, sizeof(url), "http://%s:%d%s", SERVER_IP, HTTP_PORT, HTTP_PATH_MESSAGE);
 
     char *json_str = cJSON_PrintUnformatted(root);
 
@@ -664,7 +742,7 @@ esp_err_t app_http_send_periodic(uint64_t timestamp, int seq_id, int battery,
 
 
 
-    cJSON_AddStringToObject(root, "device_id", DEVICE_ID);
+    cJSON_AddStringToObject(root, "device_id", app_get_device_id());
 
     cJSON_AddNumberToObject(root, "timestamp", (double)timestamp);
 
@@ -735,8 +813,7 @@ esp_err_t app_http_send_periodic(uint64_t timestamp, int seq_id, int battery,
 
 
     char url[128];
-
-    snprintf(url, sizeof(url), "http://%s:%d/api/data", SERVER_IP, HTTP_PORT);
+    snprintf(url, sizeof(url), "http://%s:%d%s", SERVER_IP, HTTP_PORT, HTTP_PATH_DATA);
 
     char *json_str = cJSON_PrintUnformatted(root);
 
