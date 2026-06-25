@@ -37,6 +37,15 @@ size_t app_mic_get_upload_pcm(int16_t *out, size_t max_samples);
 bool app_mic_append_sample(int16_t sample);
 int32_t app_mic_get_last_raw(void);
 
+/** True while ESP-SR feed task owns I2S reads (upload path uses decimated samples). */
+bool app_mic_sr_feed_active(void);
+
+/** Block until a decimated upload sample is ready (used when SR feed is active). */
+bool app_mic_take_upload_sample(int16_t *out, uint32_t timeout_ms);
+
+/** Called by app_sr when feed/detect tasks start or stop. */
+void app_mic_sr_set_feed_active(bool active);
+
 #ifdef __cplusplus
 }
 #endif
@@ -51,6 +60,11 @@ public:
     esp_err_t app_mic_init();
     bool app_mic_check_module();
     bool read_sample_pcm(int16_t *out);
+
+    /** Read nsamples of 16 kHz mono PCM from I2S (for ESP-SR feed task). */
+    bool read_raw_pcm(int16_t *buf, int nsamples);
+
+    void *get_i2s_handle() const { return i2s_rx_handle; }
 
 private:
     const char *TAG;

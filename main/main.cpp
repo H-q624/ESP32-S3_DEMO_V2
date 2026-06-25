@@ -12,6 +12,7 @@
 #include "app_battery.h"
 #include "app_extflash.h"
 #include "app_speaker.h"
+#include "app_sr.h"
 #include "sdkconfig.h"
 #include <cstdio>
 #include <cstdlib>
@@ -61,6 +62,10 @@ static MEMS_MIC *mic = nullptr;
 static ExtFlash *ext_flash = nullptr;
 static uint32_t s_last_fall_alarm_ms = 0;
 
+static esp_err_t send_manual_alarm(float *acc, float *gyro, int imu_samples,
+                                   int16_t *audio, int audio_samples);
+static esp_err_t send_voice_message(int16_t *audio, int audio_samples);
+
 static void fall_alert_task(void *arg) {
     (void)arg;
     speaker_beep(2000, 500);
@@ -70,6 +75,49 @@ static void fall_alert_task(void *arg) {
 static void trigger_fall_alert_sound(void) {
     xTaskCreate(fall_alert_task, "fall_alert", 3072, nullptr, 4, nullptr);
 }
+
+#if CONFIG_APP_SR_ENABLE
+static void on_sr_event(app_sr_event_t evt, int command_id, const char *cmd_str) {
+    (void)command_id;
+  switch (evt) {
+    case APP_SR_EVT_WAKEWORD:
+      ESP_LOGI(TAG, "SR: wake word detected");
+      speaker_beep(1000, 150);
+      break;
+    case APP_SR_EVT_CMD_HELP:
+    case APP_SR_EVT_CMD_ALARM:
+      ESP_LOGI(TAG, "SR: voice alarm command (%s)", cmd_str ? cmd_str : "");
+      break;
+    case APP_SR_EVT_CMD_MESSAGE:
+      ESP_LOGI(TAG, "SR: voice message command (%s)", cmd_str ? cmd_str : "");
+      break;
+    case APP_SR_EVT_TIMEOUT:
+      ESP_LOGW(TAG, "SR: command timeout");
+      break;
+    default:
+      break;
+  }
+}
+
+static void handle_pending_sr_events(float *acc, float *gyro, int imu_n,
+                                     int16_t *audio, int audio_n) {
+  app_sr_event_t evt;
+  int cmd_id = 0;
+  while (app_sr_poll_event(&evt, &cmd_id)) {
+    switch (evt) {
+      case APP_SR_EVT_CMD_HELP:
+      case APP_SR_EVT_CMD_ALARM:
+        send_manual_alarm(acc, gyro, imu_n, audio, audio_n);
+        break;
+      case APP_SR_EVT_CMD_MESSAGE:
+        send_voice_message(audio, audio_n);
+        break;
+      default:
+        break;
+    }
+  }
+}
+#endif
 
 static int read_battery_for_upload(void) {
     int pct = app_battery_read_percent();
@@ -128,7 +176,7 @@ static void log_round_summary(int imu_n, size_t audio_n, const int16_t *audio,
     ESP_LOGI(TAG, "GPS: disabled");
 #endif
     ESP_LOGI(TAG, "JSON: %d bytes", json_len);
-    ESP_LOGI(TAG, "Upload: %s", upload_ret == ESP_OK ? "成功" : "失败(网络不可用或4G未连接)");
+    ESP_LOGI(TAG, "Upload: %s", upload_ret == ESP_OK ? "成功" : "失败(网络不可用或WiFi未连接)");
     ESP_LOGI(TAG, "==================================");
 }
 
@@ -445,14 +493,6 @@ static int collect_to_buffers(float *acc_out, float *gyro_out,
             audio_s = pcm;
             app_mic_append_sample(pcm);
 
-            if ((i % 50) == 0) {
-                if (got_imu) {
-                    ESP_LOGI(TAG, "IMU[%d]: acc=(%.3f,%.3f,%.3f) gyro=(%.2f,%.2f,%.2f)",
-                             i, ax, ay, az, gx, gy, gz);
-                }
-                ESP_LOGI(TAG, "Audio[%d]: pcm=%d raw=0x%08lx",
-                         i, (int)audio_s, (unsigned long)(uint32_t)app_mic_get_last_raw());
-            }
             if (audio_s < audio_min) audio_min = audio_s;
             if (audio_s > audio_max) audio_max = audio_s;
             audio_sum += audio_s;
@@ -492,6 +532,39 @@ static int collect_to_buffers(float *acc_out, float *gyro_out,
             write_sample_to_flash(flash_f, ax, ay, az, gx, gy, gz, audio_s);
         }
 
+#if CONFIG_APP_SR_ENABLE
+        if (got_imu && count > 0) {
+            size_t sr_audio_n = app_mic_get_upload_pcm(audio_out, (size_t)count);
+            handle_pending_sr_events(acc_out, gyro_out, count, audio_out, (int)sr_audio_n);
+        }
+#endif
+
+        if ((i % 50) == 0) {
+            if (got_imu) {
+                ESP_LOGI(TAG, "IMU[%d]: acc=(%.3f,%.3f,%.3f) gyro=(%.2f,%.2f,%.2f)",
+                         i, ax, ay, az, gx, gy, gz);
+            }
+            if (i < AUDIO_COLLECT_SAMPLES) {
+                ESP_LOGI(TAG, "Audio[%d]: pcm=%d raw=0x%08lx",
+                         i, (int)audio_s, (unsigned long)(uint32_t)app_mic_get_last_raw());
+            }
+#if CONFIG_GPS_ENABLE
+            {
+                gps_data_t gps_snap;
+                app_gps_get_data(&gps_snap);
+                if (app_gps_has_fix()) {
+                    ESP_LOGI(TAG, "GPS[%d]: fix lat=%.6f lng=%.6f alt=%.1fm sats=%d speed=%.1fkm/h",
+                             i, gps_snap.latitude, gps_snap.longitude,
+                             (double)gps_snap.altitude, gps_snap.satellites,
+                             (double)gps_snap.speed_kmh);
+                } else {
+                    ESP_LOGI(TAG, "GPS[%d]: no fix sats=%d qual=%d",
+                             i, gps_snap.satellites, gps_snap.fix_quality);
+                }
+            }
+#endif
+        }
+
         vTaskDelay(pdMS_TO_TICKS(period_ms));
     }
 
@@ -518,9 +591,9 @@ extern "C" void app_main(void) {
     vTaskDelay(pdMS_TO_TICKS(100));
     ESP_LOGI(TAG, "=== IMU+MIC 采集上传 (每轮 %ds) ===", CONFIG_COLLECT_DURATION_SEC);
 
-    /* ---- 1. Network ---- */
-    ESP_LOGI(TAG, "[1/8] 初始化 4G 网络 (ML307R)...");
-    app_network_init(NET_MODE_ML307R, NULL, NULL);
+    /* ---- 1. Network (WiFi) ---- */
+    ESP_LOGI(TAG, "[1/8] 连接 WiFi: %s...", CONFIG_WIFI_SSID);
+    app_network_init(NET_MODE_WIFI, CONFIG_WIFI_SSID, CONFIG_WIFI_PASSWORD);
 
     /* ---- 2. SPIFFS ---- */
     ESP_LOGI(TAG, "[2/8] 初始化 SPIFFS flash 存储...");
@@ -582,6 +655,18 @@ extern "C" void app_main(void) {
         ESP_LOGI(TAG, "Mic ready (I2S %dHz, upload sync %dHz)",
                  MIC_SAMPLE_RATE, MIC_UPLOAD_SAMPLE_RATE);
     }
+
+#if CONFIG_APP_SR_ENABLE
+    if (mic && mic->app_mic_check_module()) {
+        app_sr_bind_mic(mic);
+        esp_err_t sr_ret = app_sr_start(on_sr_event);
+        if (sr_ret != ESP_OK) {
+            ESP_LOGW(TAG, "ESP-SR start failed: %s", esp_err_to_name(sr_ret));
+        } else {
+            ESP_LOGI(TAG, "ESP-SR running — wake: 你好小智; commands: 救命/报警/留言");
+        }
+    }
+#endif
 
     /* ---- 8. 分配缓冲区 ---- */
     ESP_LOGI(TAG, "[8/8] 分配内存缓冲区...");

@@ -28,6 +28,22 @@ menu "App Demo Configuration"
                 I2C speed (100kHz recommended for stable IMU init).
     endmenu
 
+    menu "ESP-SR Speech Recognition"
+        config APP_SR_ENABLE
+            bool "Enable ESP-SR wake word and command recognition"
+            default y
+            help
+                Use ESP-SR AFE + WakeNet + MultiNet on the SPH0645 microphone.
+                Requires a "model" partition in partitions.csv.
+
+        config APP_SR_WAKE_ONLY
+            bool "Wake word only (disable command recognition)"
+            depends on APP_SR_ENABLE
+            default n
+            help
+                Only detect the wake word (你好小智). Saves RAM if MultiNet is too heavy.
+    endmenu
+
     menu "I2S MEMS MIC Configuration (SPH0645)"
         config MIC_SAMPLE_RATE
             int "Audio Sample Rate"
@@ -52,6 +68,23 @@ menu "App Demo Configuration"
             default 3
             help
                 SPH0645 DataOut pin (IO3).
+
+        config MIC_I2S_AUTO_PROBE
+            bool "Auto-probe I2S slot format at init"
+            default n
+            help
+                SPH0645 on this board uses Philips / 32-bit / LEFT channel.
+                Disable auto-probe and use fixed format (recommended for production).
+
+        config MIC_I2S_DMA_DESC_NUM
+            int "I2S DMA descriptor count"
+            default 4
+            range 2 16
+
+        config MIC_I2S_DMA_FRAME_NUM
+            int "I2S DMA frame size (samples per descriptor)"
+            default 128
+            range 64 512
     endmenu
 
     menu "Battery Configuration"
@@ -189,6 +222,20 @@ menu "App Demo Configuration"
             default 9600
             help
                 GPS module UART baud rate.
+    endmenu
+
+    menu "WiFi Configuration"
+        config WIFI_SSID
+            string "WiFi SSID"
+            default "清和科技"
+            help
+                WiFi network name for data upload.
+
+        config WIFI_PASSWORD
+            string "WiFi Password"
+            default "qinghekeji"
+            help
+                WiFi password for data upload.
     endmenu
 
     config COLLECT_DURATION_SEC
