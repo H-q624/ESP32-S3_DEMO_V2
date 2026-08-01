@@ -23,6 +23,7 @@ extern "C" {
 #define BATTERY_LED3_MV         CONFIG_BATTERY_LED3_MV
 
 esp_err_t app_battery_init(void);
+int app_battery_read_adc_mv(void);
 int app_battery_read_mv(void);
 int app_battery_read_percent(void);
 void app_battery_led_update(void);

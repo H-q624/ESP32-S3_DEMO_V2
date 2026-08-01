@@ -3,6 +3,7 @@
 #include "driver/gpio.h"
 #include "esp_log.h"
 #include "esp_timer.h"
+#include "freertos/queue.h"
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -13,6 +14,8 @@ static const char *TAG = "GPS";
 /* 全局 GPS 数据 */
 gps_data_t g_gps_data = {0};
 static portMUX_TYPE gps_spinlock = portMUX_INITIALIZER_UNLOCKED;
+static QueueHandle_t s_gps_uart_queue = nullptr;
+static char s_last_gnrmc[128] = {0};
 
 /* ---- NMEA 解析 ---- */
 
@@ -24,13 +27,6 @@ static double nmea_to_degrees(double nmea_val) {
     return (double)deg + minutes / 60.0;
 }
 
-static int nmea_parse_int(const char *s, int len) {
-    char buf[16] = {0};
-    if (len <= 0 || len >= 16) return 0;
-    memcpy(buf, s, (size_t)len);
-    return atoi(buf);
-}
-
 static double nmea_parse_float(const char *s, int len) {
     char buf[32] = {0};
     if (len <= 0 || len >= 32) return 0.0;
@@ -38,79 +34,106 @@ static double nmea_parse_float(const char *s, int len) {
     return atof(buf);
 }
 
-/*
- * 解析 $GPGGA 语句
- * 例: $GPGGA,092204.000,3909.1234,N,11623.5678,E,1,12,1.0,50.5,M,-5.7,M,,*7F
- */
-static void parse_gpgga(char *fields[], int count) {
-    if (count < 10) return;
+static int nmea_split_fields(char *line, char *fields[], int max_fields) {
+    if (!line || !fields || max_fields <= 0) return 0;
 
-    /* 时间 */
-    if (fields[1] && strlen(fields[1]) >= 6) {
-        g_gps_data.hour   = nmea_parse_int(fields[1] + 0, 2);
-        g_gps_data.minute = nmea_parse_int(fields[1] + 2, 2);
-        g_gps_data.second = nmea_parse_int(fields[1] + 4, 2);
+    int count = 0;
+    char *p = line;
+    while (count < max_fields) {
+        fields[count++] = p;
+        char *comma = strchr(p, ',');
+        if (!comma) break;
+
+        *comma = '\0';
+        p = comma + 1;
     }
 
-    /* 纬度 */
-    double lat = nmea_to_degrees(nmea_parse_float(fields[2], (int)strlen(fields[2])));
-    if (fields[3] && fields[3][0] == 'S') lat = -lat;
-    g_gps_data.latitude = lat;
+    return count;
+}
 
-    /* 经度 */
-    double lng = nmea_to_degrees(nmea_parse_float(fields[4], (int)strlen(fields[4])));
-    if (fields[5] && fields[5][0] == 'W') lng = -lng;
-    g_gps_data.longitude = lng;
+static void gps_mark_invalid(void) {
+    portENTER_CRITICAL(&gps_spinlock);
+    g_gps_data.valid = false;
+    g_gps_data.fix_quality = 0;
+    portEXIT_CRITICAL(&gps_spinlock);
+}
 
-    /* 定位质量 */
-    g_gps_data.fix_quality = (uint8_t)nmea_parse_int(fields[6], (int)strlen(fields[6]));
+static int nmea_hex_value(char ch) {
+    if (ch >= '0' && ch <= '9') return ch - '0';
+    if (ch >= 'A' && ch <= 'F') return ch - 'A' + 10;
+    if (ch >= 'a' && ch <= 'f') return ch - 'a' + 10;
+    return -1;
+}
 
-    /* 卫星数 */
-    g_gps_data.satellites = (uint8_t)nmea_parse_int(fields[7], (int)strlen(fields[7]));
-
-    /* 海拔 */
-    g_gps_data.altitude = (float)nmea_parse_float(fields[9], (int)strlen(fields[9]));
-
-    if (g_gps_data.fix_quality >= 1) {
-        g_gps_data.valid = true;
+static bool nmea_checksum_valid(const char *line, const char *asterisk) {
+    if (!line || line[0] != '$' || !asterisk ||
+        asterisk[1] == '\0' || asterisk[2] == '\0') {
+        return false;
     }
+
+    uint8_t checksum = 0;
+    for (const char *p = line + 1; p < asterisk; ++p) {
+        checksum ^= (uint8_t)*p;
+    }
+
+    int high = nmea_hex_value(asterisk[1]);
+    int low = nmea_hex_value(asterisk[2]);
+    return high >= 0 && low >= 0 &&
+           checksum == (uint8_t)((high << 4) | low);
 }
 
 /*
- * 解析 $GPRMC 语句
- * 例: $GPRMC,092204.000,A,3909.1234,N,11623.5678,E,0.5,180.0,010624,,,D*6A
+ * 仅解析 $GNRMC：
+ * $GNRMC,092204.000,A,3909.1234,N,11623.5678,E,0.5,180.0,010624,,,D*6A
  */
-static void parse_gprmc(char *fields[], int count) {
-    if (count < 8) return;
+static bool parse_gnrmc(char *fields[], int count) {
+    if (count < 7) {
+        gps_mark_invalid();
+        return false;
+    }
 
-    /* 有效标志 */
+    /* RMC 状态：A=定位有效，V=定位无效。 */
     bool active = (fields[2] && fields[2][0] == 'A');
     if (!active) {
-        g_gps_data.valid = false;
-        return;
+        gps_mark_invalid();
+        return false;
     }
 
-    /* 速度 (节 -> km/h) */
-    g_gps_data.speed_kmh = (float)(nmea_parse_float(fields[7], (int)strlen(fields[7])) * 1.852);
-
-    /* 航向 */
-    g_gps_data.heading = (float)nmea_parse_float(fields[8], (int)strlen(fields[8]));
-
-    /* 日期 */
-    if (fields[9] && strlen(fields[9]) >= 6) {
-        g_gps_data.day   = nmea_parse_int(fields[9] + 0, 2);
-        g_gps_data.month = nmea_parse_int(fields[9] + 2, 2);
-        g_gps_data.year  = (uint16_t)(2000 + nmea_parse_int(fields[9] + 4, 2));
+    if (!fields[3] || fields[3][0] == '\0' ||
+        !fields[4] || (fields[4][0] != 'N' && fields[4][0] != 'S') ||
+        !fields[5] || fields[5][0] == '\0' ||
+        !fields[6] || (fields[6][0] != 'E' && fields[6][0] != 'W')) {
+        gps_mark_invalid();
+        return false;
     }
 
+    double lat = nmea_to_degrees(nmea_parse_float(fields[3], (int)strlen(fields[3])));
+    if (fields[4][0] == 'S') lat = -lat;
+
+    double lng = nmea_to_degrees(nmea_parse_float(fields[5], (int)strlen(fields[5])));
+    if (fields[6][0] == 'W') lng = -lng;
+
+    if (std::fabs(lat) > 90.0 || std::fabs(lng) > 180.0) {
+        gps_mark_invalid();
+        return false;
+    }
+
+    portENTER_CRITICAL(&gps_spinlock);
+    g_gps_data.latitude = lat;
+    g_gps_data.longitude = lng;
+    /* GNRMC 没有 GGA 的 fix_quality 字段，状态 A 对应有效定位。 */
+    g_gps_data.fix_quality = 1;
     g_gps_data.valid = true;
+    g_gps_data.last_update_ms = (uint32_t)(esp_timer_get_time() / 1000);
+    portEXIT_CRITICAL(&gps_spinlock);
+    return true;
 }
 
 /*
  * 解析一条 NMEA 语句
  */
-static void parse_nmea_line(char *line) {
-    if (!line || line[0] != '$') return;
+static bool parse_nmea_line(char *line) {
+    if (!line || line[0] != '$') return false;
 
     /* 去除 \r\n */
     int len = (int)strlen(line);
@@ -118,26 +141,32 @@ static void parse_nmea_line(char *line) {
         line[--len] = '\0';
     }
 
-    /* 校验和检查 (可选) */
+    /* 忽略 GPTXT/GGA/GSA/GSV 等所有非 GNRMC 语句。 */
+    if (strncmp(line, "$GNRMC,", 7) != 0) {
+        return false;
+    }
+
+    /* Preserve the complete GNRMC, including checksum, before parsing mutates it. */
+    portENTER_CRITICAL(&gps_spinlock);
+    strncpy(s_last_gnrmc, line, sizeof(s_last_gnrmc) - 1);
+    s_last_gnrmc[sizeof(s_last_gnrmc) - 1] = '\0';
+    portEXIT_CRITICAL(&gps_spinlock);
+
+    /* 校验失败时仍保留并打印原始语句，但不使用其中的坐标。 */
     char *ast = strchr(line, '*');
-    if (ast) *ast = '\0'; /* 截断校验和部分 */
+    if (!nmea_checksum_valid(line, ast)) {
+        gps_mark_invalid();
+        return false;
+    }
+    *ast = '\0';
 
     /* 分割字段 */
     char *fields[32] = {0};
-    int field_cnt = 0;
-    char *tok = strtok(line, ",");
-    while (tok && field_cnt < 32) {
-        fields[field_cnt++] = tok;
-        tok = strtok(NULL, ",");
-    }
-    if (field_cnt == 0) return;
+    int field_cnt = nmea_split_fields(line, fields, 32);
+    if (field_cnt == 0) return false;
 
-    /* 根据语句类型分发 */
-    if (strcmp(fields[0], "$GPGGA") == 0 || strcmp(fields[0], "$GNGGA") == 0) {
-        parse_gpgga(fields, field_cnt);
-    } else if (strcmp(fields[0], "$GPRMC") == 0 || strcmp(fields[0], "$GNRMC") == 0) {
-        parse_gprmc(fields, field_cnt);
-    }
+    return strcmp(fields[0], "$GNRMC") == 0 &&
+           parse_gnrmc(fields, field_cnt);
 }
 
 /* ---- 公开函数 ---- */
@@ -152,9 +181,9 @@ esp_err_t app_gps_init(void) {
     io_conf.intr_type    = GPIO_INTR_DISABLE;
     gpio_config(&io_conf);
 
-    /* RST 高 = 不复位; 先释放复位再开电源 */
+    /* ON/OFF 和 nRESET 都是低有效: 保持高电平表示常开且不复位 */
     gpio_set_level((gpio_num_t)GPS_RST_PIN, 1);
-    gpio_set_level((gpio_num_t)GPS_ON_OFF_PIN, 0);
+    gpio_set_level((gpio_num_t)GPS_ON_OFF_PIN, 1);
 
     /* 1PPS 引脚 (仅用于检测, 输入) */
     io_conf.pin_bit_mask = (1ULL << GPS_1PPS_PIN);
@@ -174,7 +203,7 @@ esp_err_t app_gps_init(void) {
     };
 
     esp_err_t ret = uart_driver_install(GPS_UART_NUM, GPS_UART_BUF_SIZE, GPS_UART_BUF_SIZE,
-                                         0, NULL, 0);
+                                         20, &s_gps_uart_queue, 0);
     if (ret != ESP_OK) {
         ESP_LOGE(TAG, "UART driver install failed: %s", esp_err_to_name(ret));
         return ret;
@@ -192,7 +221,7 @@ esp_err_t app_gps_init(void) {
         return ret;
     }
 
-    ESP_LOGI(TAG, "GPS UART%d init: TX=IO%d, RX=IO%d, baud=%d",
+    ESP_LOGI(TAG, "GPS UART%d interrupt mode: TX=IO%d, RX=IO%d, baud=%d",
              GPS_UART_NUM, GPS_TX_PIN, GPS_RX_PIN, GPS_BAUDRATE);
     ESP_LOGI(TAG, "GPS control: ON_OFF=IO%d, RST=IO%d, 1PPS=IO%d",
              GPS_ON_OFF_PIN, GPS_RST_PIN, GPS_1PPS_PIN);
@@ -202,14 +231,14 @@ esp_err_t app_gps_init(void) {
 
 void app_gps_power_on(void) {
     gpio_set_level((gpio_num_t)GPS_RST_PIN, 1);
-    vTaskDelay(pdMS_TO_TICKS(50));
     gpio_set_level((gpio_num_t)GPS_ON_OFF_PIN, 1);
     ESP_LOGI(TAG, "GPS power ON (ON_OFF=IO%d)", GPS_ON_OFF_PIN);
 }
 
 void app_gps_power_off(void) {
-    gpio_set_level((gpio_num_t)GPS_ON_OFF_PIN, 0);
-    ESP_LOGI(TAG, "GPS power OFF");
+    gpio_set_level((gpio_num_t)GPS_RST_PIN, 1);
+    gpio_set_level((gpio_num_t)GPS_ON_OFF_PIN, 1);
+    ESP_LOGI(TAG, "GPS always-on mode: power off ignored");
 }
 
 void app_gps_get_data(gps_data_t *out) {
@@ -222,50 +251,98 @@ void app_gps_get_data(gps_data_t *out) {
 bool app_gps_has_fix(void) {
     gps_data_t snap;
     app_gps_get_data(&snap);
+    uint32_t now_ms = (uint32_t)(esp_timer_get_time() / 1000);
     return snap.valid && snap.fix_quality >= 1 &&
-           (snap.latitude != 0.0 || snap.longitude != 0.0);
+           (snap.latitude != 0.0 || snap.longitude != 0.0) &&
+           (now_ms - snap.last_update_ms <= 3000);
+}
+
+bool app_gps_get_last_gnrmc(char *out, size_t out_size) {
+    if (!out || out_size == 0) {
+        return false;
+    }
+
+    portENTER_CRITICAL(&gps_spinlock);
+    bool received = s_last_gnrmc[0] != '\0';
+    if (received) {
+        strncpy(out, s_last_gnrmc, out_size - 1);
+        out[out_size - 1] = '\0';
+    } else {
+        out[0] = '\0';
+    }
+    portEXIT_CRITICAL(&gps_spinlock);
+    return received;
 }
 
 /*
- * GPS 解析任务: 每 200ms 轮询 UART 缓冲区，逐行解析 NMEA
+ * GPS 解析任务:
+ * UART 驱动在接收中断中写入环形缓冲区并投递事件，本任务被事件唤醒后
+ * 批量读取数据、组装 NMEA 行并提取经纬度。
  */
 void app_gps_task(void *pvParameters) {
     (void)pvParameters;
+    if (s_gps_uart_queue == nullptr) {
+        ESP_LOGE(TAG, "GPS UART event queue is not initialized");
+        vTaskDelete(nullptr);
+        return;
+    }
+
     char line[256];
     int line_pos = 0;
+    uint8_t rx_buf[256];
+    uint32_t rx_count = 0;
+    uint32_t last_rx_ms = (uint32_t)(esp_timer_get_time() / 1000);
+    uint32_t last_no_data_log_ms = last_rx_ms;
 
     while (1) {
-        uint8_t ch;
-        int len = uart_read_bytes(GPS_UART_NUM, &ch, 1, pdMS_TO_TICKS(50));
-        if (len > 0) {
-            if (ch == '\n') {
-                line[line_pos] = '\0';
-                if (line_pos > 0) {
-                    portENTER_CRITICAL(&gps_spinlock);
-                    g_gps_data.last_update_ms = (uint32_t)(esp_timer_get_time() / 1000);
-                    portEXIT_CRITICAL(&gps_spinlock);
-                    parse_nmea_line(line);
-                }
-                line_pos = 0;
-            } else if (ch != '\r' && line_pos < 255) {
-                line[line_pos++] = (char)ch;
-            }
-        }
+        uint32_t now_ms = (uint32_t)(esp_timer_get_time() / 1000);
+        uart_event_t event;
+        if (xQueueReceive(s_gps_uart_queue, &event, pdMS_TO_TICKS(100)) == pdTRUE) {
+            if (event.type == UART_DATA) {
+                size_t remaining = event.size;
+                while (remaining > 0) {
+                    size_t request = remaining < sizeof(rx_buf) ? remaining : sizeof(rx_buf);
+                    int len = uart_read_bytes(GPS_UART_NUM, rx_buf, request, 0);
+                    if (len <= 0) {
+                        break;
+                    }
 
-        /* 定期打印 GPS 状态 */
-        static uint32_t last_print = 0;
-        uint32_t now = (uint32_t)(esp_timer_get_time() / 1000);
-        if (now - last_print > 5000) {
-            last_print = now;
-            gps_data_t snap;
-            app_gps_get_data(&snap);
-            if (snap.valid) {
-                ESP_LOGI(TAG, "Fix: lat=%.5f lng=%.5f alt=%.1fm sats=%d speed=%.1fkm/h",
-                         snap.latitude, snap.longitude,
-                         (double)snap.altitude, snap.satellites,
-                         (double)snap.speed_kmh);
-            } else {
-                ESP_LOGD(TAG, "No fix yet, sats=%d", snap.satellites);
+                    remaining -= (size_t)len;
+                    rx_count += (uint32_t)len;
+                    last_rx_ms = (uint32_t)(esp_timer_get_time() / 1000);
+
+                    for (int i = 0; i < len; ++i) {
+                        uint8_t ch = rx_buf[i];
+                        if (ch == '\n') {
+                            line[line_pos] = '\0';
+                            if (line_pos > 0) {
+                                parse_nmea_line(line);
+                            }
+                            line_pos = 0;
+                        } else if (ch != '\r' && line_pos < (int)sizeof(line) - 1) {
+                            line[line_pos++] = (char)ch;
+                        } else if (line_pos >= (int)sizeof(line) - 1) {
+                            line_pos = 0;
+                        }
+                    }
+                }
+            } else if (event.type == UART_FIFO_OVF || event.type == UART_BUFFER_FULL) {
+                ESP_LOGW(TAG, "GPS UART0 RX overflow, resetting buffer");
+                uart_flush_input(GPS_UART_NUM);
+                xQueueReset(s_gps_uart_queue);
+                line_pos = 0;
+            } else if (event.type == UART_PARITY_ERR) {
+                ESP_LOGW(TAG, "GPS UART0 parity error");
+            } else if (event.type == UART_FRAME_ERR) {
+                ESP_LOGW(TAG, "GPS UART0 frame error");
+            }
+        } else {
+            if (rx_count == 0 && now_ms - last_no_data_log_ms >= 5000) {
+                last_no_data_log_ms = now_ms;
+                ESP_LOGW(TAG, "GPS UART0 no data: RX=IO%d baud=%d", GPS_RX_PIN, GPS_BAUDRATE);
+            } else if (line_pos > 0 && now_ms - last_rx_ms >= 1000) {
+                ESP_LOGW(TAG, "GPS UART0 partial RX discarded");
+                line_pos = 0;
             }
         }
     }

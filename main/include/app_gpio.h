@@ -17,6 +17,12 @@
 #define GPIO_KEY_SW1  CONFIG_KEY_SW1_PIN
 #define GPIO_KEY_SW3  CONFIG_KEY_SW3_PIN
 #define GPIO_KEY_SW6  CONFIG_KEY_SW6_PIN
+#define GPIO_KEY_NEW1  CONFIG_KEY_NEW1_PIN
+#define GPIO_KEY_NEW2  CONFIG_KEY_NEW2_PIN
+#ifndef CONFIG_PA_CTRL_GPIO
+#define CONFIG_PA_CTRL_GPIO -1
+#endif
+#define GPIO_PA_CTRL    CONFIG_PA_CTRL_GPIO
 
 typedef enum {
     KEY_IDLE = 0,
@@ -73,8 +79,6 @@ extern Button button;
 void app_keys_init(void);
 void app_led_init(void);
 void app_led_set(int led_index, bool on);
-int  app_key_sw1_pressed(void);
-int  app_key_sw3_pressed(void);
 bool app_key_privacy_mode(void);
 
 extern "C" bool get_current_data_mode();

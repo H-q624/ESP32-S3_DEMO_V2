@@ -92,16 +92,19 @@ esp_err_t app_http_send_data(const char* path, const char* data, size_t data_len
  * @param audio_len Length of audio data
  * @return esp_err_t ESP_OK on success
  */
-esp_err_t app_http_send_alarm(int event_id, uint64_t timestamp, int battery,
-                              double lat, double lng, int status_confirm,
+esp_err_t app_http_send_alarm(const char *event, const char *trigger,
+                              float confidence, uint64_t timestamp, int seq,
+                              int battery,
+                              double lat, double lng,
                               float* acc_data, int acc_len,
                               float* gyro_data, int gyro_len,
                               float* baro_data, int baro_len,
-                              int16_t* audio_data, int audio_len);
+                              int duration_ms,
+                              const char *audio_ref);
 
-esp_err_t app_http_send_message(uint64_t timestamp, int battery,
+esp_err_t app_http_send_message(uint64_t timestamp, int seq, int battery,
                                 double lat, double lng,
-                                int16_t* audio_data, int audio_len);
+                                int duration_ms, const char *audio_ref);
 
 /**
  * @brief Encode audio PCM data to base64 string

@@ -5,7 +5,7 @@
 #include <stdint.h>
 #include <stddef.h>
 
-#define SPEAKER_GPIO        10
+#define SPEAKER_GPIO        10  /* disabled speaker output: GPIO is held low */
 #define SPEAKER_SAMPLE_RATE 16000  /* must match audio source */
 
 esp_err_t speaker_init(void);

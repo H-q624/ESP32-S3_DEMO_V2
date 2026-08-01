@@ -3,12 +3,30 @@
 #include "esp_log.h"
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
+#include "freertos/queue.h"
 #include "freertos/task.h"
 #include "soc/gpio_num.h"
 
 #define GPIO_PIN_MASK_IN (1ULL << GPIO_PIN_BTN)
-#define GPIO_PIN_MASK_OUT ((1ULL << GPIO_PIN_LED) | \
-    ((GPIO_PIN_BEEP >= 0) ? (1ULL << GPIO_PIN_BEEP) : 0ULL))
+
+static bool gpio_output_available(int pin) {
+    if (!GPIO_IS_VALID_OUTPUT_GPIO(pin)) {
+        return false;
+    }
+#if CONFIG_EXTFLASH_ENABLE
+    if (pin == CONFIG_EXTFLASH_CS_PIN ||
+        pin == CONFIG_EXTFLASH_CLK_PIN ||
+        pin == CONFIG_EXTFLASH_MOSI_PIN ||
+        pin == CONFIG_EXTFLASH_MISO_PIN) {
+        return false;
+    }
+#endif
+    return true;
+}
+
+static uint64_t gpio_output_mask(int pin) {
+    return gpio_output_available(pin) ? (1ULL << (unsigned)pin) : 0ULL;
+}
 
 bool global_btn_sign = false;
 TaskHandle_t gpio_handler = nullptr;
@@ -47,12 +65,16 @@ void Button::app_btn_init() {
                           .pull_down_en = GPIO_PULLDOWN_DISABLE,
                           .intr_type = GPIO_INTR_DISABLE};
   gpio_config(&config_in);
-  gpio_config_t config_out = {.pin_bit_mask = GPIO_PIN_MASK_OUT,
+  uint64_t output_mask = gpio_output_mask(GPIO_PIN_LED) |
+                         gpio_output_mask(GPIO_PIN_BEEP);
+  gpio_config_t config_out = {.pin_bit_mask = output_mask,
                               .mode = GPIO_MODE_OUTPUT,
                               .pull_up_en = GPIO_PULLUP_DISABLE,
                               .pull_down_en = GPIO_PULLDOWN_DISABLE,
                               .intr_type = GPIO_INTR_DISABLE};
-  gpio_config(&config_out);
+  if (output_mask != 0) {
+    gpio_config(&config_out);
+  }
   ESP_LOGI(TAG, "GPIO Set successfully");
   
   // 创建模式切换事件组
@@ -182,11 +204,11 @@ void Button::toggle_data_mode(){
     // 实际切换模式
     data_mode = target_mode;
     
-    if(data_mode) {
+    if(data_mode && gpio_output_available(GPIO_PIN_LED)) {
       // 切换回MPU模式
       gpio_set_level((gpio_num_t)GPIO_PIN_LED, 0);
       ESP_LOGI(TAG, "Switched to MPU mode");
-    } else {
+    } else if (gpio_output_available(GPIO_PIN_LED)) {
       // 切换到MIC模式
       gpio_set_level((gpio_num_t)GPIO_PIN_LED, 1);
       ESP_LOGI(TAG, "Switched to MIC mode");
@@ -231,19 +253,98 @@ void set_buzzer_off(){
  * SW6 → IO45 (隐私模式拨动开关, 高=隐私开, 低=隐私关, 内部下拉)
  */
 
-static int s_sw1_last = 1;
-static int s_sw3_last = 1;
+#define KEY_DEBOUNCE_MS 30
+#define KEY_RETRIGGER_GUARD_MS 50
+
+typedef struct {
+    gpio_num_t gpio_num;
+    TickType_t interrupt_tick;
+} key_interrupt_event_t;
+
+static QueueHandle_t s_key_event_queue = nullptr;
+static TaskHandle_t s_key_event_task = nullptr;
+static bool s_keys_initialized = false;
+
+static void key_gpio_isr(void *arg) {
+    if (s_key_event_queue == nullptr) {
+        return;
+    }
+
+    key_interrupt_event_t event = {
+        .gpio_num = static_cast<gpio_num_t>(reinterpret_cast<uintptr_t>(arg)),
+        .interrupt_tick = xTaskGetTickCountFromISR(),
+    };
+    BaseType_t higher_priority_task_woken = pdFALSE;
+    xQueueSendFromISR(s_key_event_queue, &event, &higher_priority_task_woken);
+    if (higher_priority_task_woken == pdTRUE) {
+        portYIELD_FROM_ISR();
+    }
+}
+
+static void key_event_task(void *arg) {
+    (void)arg;
+    TickType_t last_io41_tick = 0;
+    TickType_t last_io40_tick = 0;
+    bool io41_seen = false;
+    bool io40_seen = false;
+    key_interrupt_event_t event;
+
+    while (true) {
+        if (xQueueReceive(s_key_event_queue, &event, portMAX_DELAY) != pdTRUE) {
+            continue;
+        }
+
+        TickType_t *last_tick = nullptr;
+        bool *seen = nullptr;
+        if (event.gpio_num == static_cast<gpio_num_t>(GPIO_KEY_SW1)) {
+            last_tick = &last_io41_tick;
+            seen = &io41_seen;
+        } else if (event.gpio_num == static_cast<gpio_num_t>(GPIO_KEY_SW3)) {
+            last_tick = &last_io40_tick;
+            seen = &io40_seen;
+        } else {
+            continue;
+        }
+
+        if (*seen &&
+            (event.interrupt_tick - *last_tick) < pdMS_TO_TICKS(KEY_RETRIGGER_GUARD_MS)) {
+            continue;
+        }
+
+        /* 软件消抖：下降沿触发后 30ms，按键仍为低电平才确认。 */
+        vTaskDelay(pdMS_TO_TICKS(KEY_DEBOUNCE_MS));
+        if (gpio_get_level(event.gpio_num) != 0) {
+            continue;
+        }
+
+        *last_tick = event.interrupt_tick;
+        *seen = true;
+        if (event.gpio_num == static_cast<gpio_num_t>(GPIO_KEY_SW1)) {
+            ESP_LOGI("main", "io41按下");
+        } else {
+            ESP_LOGI("main", "io40按下");
+        }
+    }
+}
 
 void app_keys_init(void) {
+    if (s_keys_initialized) {
+        return;
+    }
+
     /* SW1 + SW3: 按键输入, 上拉, 按下为低 */
     gpio_config_t key_cfg = {
         .pin_bit_mask = (1ULL << GPIO_KEY_SW1) | (1ULL << GPIO_KEY_SW3),
         .mode         = GPIO_MODE_INPUT,
         .pull_up_en   = GPIO_PULLUP_ENABLE,
         .pull_down_en = GPIO_PULLDOWN_DISABLE,
-        .intr_type    = GPIO_INTR_DISABLE,
+        .intr_type    = GPIO_INTR_NEGEDGE,
     };
-    gpio_config(&key_cfg);
+    esp_err_t ret = gpio_config(&key_cfg);
+    if (ret != ESP_OK) {
+        ESP_LOGE("KEYS", "Key GPIO config failed: %s", esp_err_to_name(ret));
+        return;
+    }
 
     /* SW6: 隐私模式拨动开关, 下拉, 拨到ON为高 */
     gpio_config_t sw6_cfg = {
@@ -253,29 +354,49 @@ void app_keys_init(void) {
         .pull_down_en = GPIO_PULLDOWN_ENABLE,
         .intr_type    = GPIO_INTR_DISABLE,
     };
-    gpio_config(&sw6_cfg);
+    ret = gpio_config(&sw6_cfg);
+    if (ret != ESP_OK) {
+        ESP_LOGE("KEYS", "SW6 GPIO config failed: %s", esp_err_to_name(ret));
+        return;
+    }
 
-    s_sw1_last = gpio_get_level((gpio_num_t)GPIO_KEY_SW1);
-    s_sw3_last = gpio_get_level((gpio_num_t)GPIO_KEY_SW3);
+    s_key_event_queue = xQueueCreate(8, sizeof(key_interrupt_event_t));
+    if (s_key_event_queue == nullptr) {
+        ESP_LOGE("KEYS", "Failed to create key interrupt queue");
+        return;
+    }
+
+    if (xTaskCreate(key_event_task, "key_event", 2048, nullptr, 6,
+                    &s_key_event_task) != pdPASS) {
+        ESP_LOGE("KEYS", "Failed to create key event task");
+        return;
+    }
+
+    ret = gpio_install_isr_service(0);
+    if (ret != ESP_OK && ret != ESP_ERR_INVALID_STATE) {
+        ESP_LOGE("KEYS", "GPIO ISR service install failed: %s", esp_err_to_name(ret));
+        return;
+    }
+
+    ret = gpio_isr_handler_add(
+        static_cast<gpio_num_t>(GPIO_KEY_SW1), key_gpio_isr,
+        reinterpret_cast<void *>(static_cast<uintptr_t>(GPIO_KEY_SW1)));
+    if (ret != ESP_OK) {
+        ESP_LOGE("KEYS", "IO%d ISR add failed: %s", GPIO_KEY_SW1, esp_err_to_name(ret));
+        return;
+    }
+
+    ret = gpio_isr_handler_add(
+        static_cast<gpio_num_t>(GPIO_KEY_SW3), key_gpio_isr,
+        reinterpret_cast<void *>(static_cast<uintptr_t>(GPIO_KEY_SW3)));
+    if (ret != ESP_OK) {
+        ESP_LOGE("KEYS", "IO%d ISR add failed: %s", GPIO_KEY_SW3, esp_err_to_name(ret));
+        return;
+    }
 
     ESP_LOGI("KEYS", "Keys ready: SW1=IO%d, SW3=IO%d, SW6(隐私)=IO%d",
              GPIO_KEY_SW1, GPIO_KEY_SW3, GPIO_KEY_SW6);
-}
-
-/* SW1 短按检测 (下降沿触发, 调用一次返回1, 之后清0) */
-int app_key_sw1_pressed(void) {
-    int cur = gpio_get_level((gpio_num_t)GPIO_KEY_SW1);
-    int pressed = (s_sw1_last == 1 && cur == 0);
-    s_sw1_last = cur;
-    return pressed;
-}
-
-/* SW3 短按检测 */
-int app_key_sw3_pressed(void) {
-    int cur = gpio_get_level((gpio_num_t)GPIO_KEY_SW3);
-    int pressed = (s_sw3_last == 1 && cur == 0);
-    s_sw3_last = cur;
-    return pressed;
+    s_keys_initialized = true;
 }
 
 /* SW6 隐私模式: 高电平 = 隐私开启 */
@@ -284,20 +405,35 @@ bool app_key_privacy_mode(void) {
 }
 
 void app_led_init(void) {
+    uint64_t led_mask = gpio_output_mask(GPIO_PIN_LED) |
+                        gpio_output_mask(GPIO_PIN_LED2);
     gpio_config_t cfg = {
-        .pin_bit_mask = (1ULL << GPIO_PIN_LED) | (1ULL << GPIO_PIN_LED2),
+        .pin_bit_mask = led_mask,
         .mode         = GPIO_MODE_OUTPUT,
         .pull_up_en   = GPIO_PULLUP_DISABLE,
         .pull_down_en = GPIO_PULLDOWN_DISABLE,
         .intr_type    = GPIO_INTR_DISABLE,
     };
-    gpio_config(&cfg);
-    gpio_set_level((gpio_num_t)GPIO_PIN_LED, 0);
-    gpio_set_level((gpio_num_t)GPIO_PIN_LED2, 0);
+    if (led_mask != 0) {
+        gpio_config(&cfg);
+    }
+    if (gpio_output_available(GPIO_PIN_LED)) {
+        gpio_set_level((gpio_num_t)GPIO_PIN_LED, 0);
+    }
+    if (gpio_output_available(GPIO_PIN_LED2)) {
+        gpio_set_level((gpio_num_t)GPIO_PIN_LED2, 0);
+    }
+    /* PA_CTRL (IO21) 上电默认拉低，避免功放上电响爆音 */
+    if (GPIO_PA_CTRL >= 0) {
+        gpio_set_level((gpio_num_t)GPIO_PA_CTRL, 0);
+        ESP_LOGI("LED", "PA_CTRL=IO%d pulled low", GPIO_PA_CTRL);
+    }
     ESP_LOGI("LED", "LED ready: LED1=IO%d LED2=IO%d", GPIO_PIN_LED, GPIO_PIN_LED2);
 }
 
 void app_led_set(int led_index, bool on) {
     gpio_num_t pin = (led_index == 0) ? (gpio_num_t)GPIO_PIN_LED : (gpio_num_t)GPIO_PIN_LED2;
-    gpio_set_level(pin, on ? 1 : 0);
+    if (gpio_output_available((int)pin)) {
+        gpio_set_level(pin, on ? 1 : 0);
+    }
 }

@@ -14,6 +14,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
+#include <cstring>
 #include <errno.h>
 #include <sys/stat.h>
 #include <sys/unistd.h>
@@ -87,9 +88,9 @@ void FileStorage::app_file_init_once() {
   
   esp_vfs_spiffs_conf_t conf = {
     .base_path = MOUNT_POINT,
-    .partition_label = NULL,
+    .partition_label = "spiffs",
     .max_files = MAX_FILES,
-    .format_if_mount_failed = true
+    .format_if_mount_failed = false
   };
 
   esp_err_t ret = esp_vfs_spiffs_register(&conf);
@@ -105,12 +106,12 @@ void FileStorage::app_file_init_once() {
   }
 
   size_t total = 0, used = 0;
-  ret = esp_spiffs_info(NULL, &total, &used);
+  ret = esp_spiffs_info("spiffs", &total, &used);
   if (ret != ESP_OK) {
     ESP_LOGE("FileStorage", "Failed to get SPIFFS info (%s)", esp_err_to_name(ret));
   } else {
     ESP_LOGI("FileStorage", "SPIFFS mounted successfully");
-    ESP_LOGI("FileStorage", "Total: %d bytes, Used: %d bytes", total, used);
+    ESP_LOGI("FileStorage", "Total: %zu bytes, Used: %zu bytes", total, used);
   }
 
   s_initialized = true;
@@ -148,7 +149,7 @@ void FileStorage::app_file_check_file_number(const char *prefix) {
            file_number);
   size_t file_size = 0;
   while (app_file_check_file(filename, &file_size)) {
-    printf("filename: %s,filesize:%d\n", filename, file_size);
+    printf("filename: %s,filesize:%zu\n", filename, file_size);
     if (file_size >= MAX_FILE_SIZE) {
       file_number++;
       snprintf(filename, sizeof(filename), "%s/%s_%d.csv", mount_point, prefix,
@@ -436,7 +437,7 @@ void IMU_Data::collection_task_loop() {
         
         if (current_buffer->count > 0) {
           imu_buffer_t *full_buffer = current_buffer;
-          ESP_LOGI(TAG, "Saving buffer with %d samples", full_buffer->count);
+          ESP_LOGI(TAG, "Saving buffer with %zu samples", full_buffer->count);
           
           if (xQueueSend(s_write_queue, &full_buffer, portMAX_DELAY) == pdTRUE) {
             current_buffer = switch_buffer();
@@ -444,7 +445,7 @@ void IMU_Data::collection_task_loop() {
             current_buffer->buffer_id = full_buffer->buffer_id + BUFFER_COUNT;
             ESP_LOGI(TAG, "IMU buffer saved successfully");
           } else {
-            ESP_LOGW(TAG, "Failed to save IMU buffer, dropping %d samples", full_buffer->count);
+            ESP_LOGW(TAG, "Failed to save IMU buffer, dropping %zu samples", full_buffer->count);
             current_buffer->count = 0;
             dropped_samples += full_buffer->count;
           }
@@ -482,7 +483,7 @@ void IMU_Data::collection_task_loop() {
         current_buffer->samples[current_buffer->count++] = data;
       } else {
         dropped_samples++;
-        ESP_LOGW(TAG, "Buffer overflow! Dropped %d samples so far",
+        ESP_LOGW(TAG, "Buffer overflow! Dropped %zu samples so far",
                  dropped_samples);
       }
 
@@ -500,10 +501,10 @@ void IMU_Data::collection_task_loop() {
             current_buffer->buffer_id = full_buffer->buffer_id + BUFFER_COUNT;
             last_switch_time = now;
 
-            ESP_LOGD(TAG, "Buffer switched: sent buffer %d with %d samples, total received: %d",
+            ESP_LOGD(TAG, "Buffer switched: sent buffer %zu with %zu samples, total received: %zu",
                      full_buffer->buffer_id, full_buffer->count, total_received);
           } else {
-            ESP_LOGW(TAG, "Write queue full! Dropping buffer with %d samples",
+            ESP_LOGW(TAG, "Write queue full! Dropping buffer with %zu samples",
                      full_buffer->count);
             current_buffer->count = 0;
             dropped_samples += full_buffer->count;
@@ -526,7 +527,7 @@ void IMU_Data::write_task_loop() {
   while (1) {
     if (xQueueReceive(s_write_queue, &buffer, portMAX_DELAY) == pdTRUE) {
       buffers_written++;
-      ESP_LOGD(TAG, "Received buffer %d for writing (%d samples, buffer#%d)",
+      ESP_LOGD(TAG, "Received buffer %zu for writing (%zu samples, buffer#%zu)",
                buffer->buffer_id, buffer->count, buffers_written);
       write_buffer_to_storage(buffer);
     }
@@ -646,7 +647,8 @@ esp_err_t MIC_Data::app_file_open_file(const char *prefix) {
   files.file_size[new_file_idx] = WAV_HEADER_SIZE;
   wav_header_written = false;
 
-  ESP_LOGI(TAG, "WAV file %s opened successfully (index=%d, size=%d)", filename, new_file_idx, files.file_size[new_file_idx]);
+  ESP_LOGI(TAG, "WAV file %s opened successfully (index=%d, size=%zu)",
+           filename, new_file_idx, files.file_size[new_file_idx]);
 
   files.index = (files.index + 1) % MAX_FILES;
   file_number++;
@@ -664,7 +666,7 @@ void MIC_Data::app_file_check_file_number(const char *prefix) {
            file_number);
   size_t file_size = 0;
   while (app_file_check_file(filename, &file_size)) {
-    printf("filename: %s,filesize:%d\n", filename, file_size);
+    printf("filename: %s,filesize:%zu\n", filename, file_size);
     file_number++;
     snprintf(filename, sizeof(filename), "%s/%s_%d.wav", mount_point, prefix,
              file_number);
@@ -724,8 +726,8 @@ void MIC_Data::update_wav_header(int index) {
   fwrite(header, 1, WAV_HEADER_SIZE, files.file[index]);
   fseek(files.file[index], current_pos, SEEK_SET);
   
-  ESP_LOGI(TAG, "WAV header updated: chunk_size=%u, data_size=%u, file_index=%d", 
-           chunk_size, total_pcm_size, index);
+  ESP_LOGI(TAG, "WAV header updated: chunk_size=%lu, data_size=%lu, file_index=%d",
+           (unsigned long)chunk_size, (unsigned long)total_pcm_size, index);
 }
 
 /**
@@ -838,8 +840,8 @@ esp_err_t MIC_Data::app_file_save_file(int index) {
   fclose(files.file[index]);
   files.file[index] = nullptr;
 
-  ESP_LOGI(TAG, "WAV file index %d saved and closed, total PCM size: %d bytes", 
-           index, total_pcm_size);
+  ESP_LOGI(TAG, "WAV file index %d saved and closed, total PCM size: %lu bytes",
+           index, (unsigned long)total_pcm_size);
 
   xSemaphoreGive(s_mutex);
   return ESP_OK;
@@ -857,7 +859,7 @@ void MIC_Data::mic_write_task_loop() {
   while (1) {
     if (xQueueReceive(wav_queue, &packet, portMAX_DELAY) == pdTRUE) {
       packets_received++;
-      ESP_LOGD(TAG, "Received WAV packet: %d bytes (header: %s)",
+      ESP_LOGD(TAG, "Received WAV packet: %zu bytes (header: %s)",
                packet.total_size, packet.is_wav_header_included ? "yes" : "no");
       write_wav_packet(&packet);
     }

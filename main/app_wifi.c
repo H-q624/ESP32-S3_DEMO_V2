@@ -554,17 +554,16 @@ static void add_audio_format(cJSON *parent) {
 
 
 
-esp_err_t app_http_send_alarm(int event_id, uint64_t timestamp, int battery,
-
-                              double lat, double lng, int status_confirm,
+esp_err_t app_http_send_alarm(const char *event, const char *trigger,
+                              float confidence, uint64_t timestamp, int seq,
+                              int battery,
+                              double lat, double lng,
 
                               float *acc_data, int acc_len,
-
                               float *gyro_data, int gyro_len,
-
                               float *baro_data, int baro_len,
-
-                              int16_t *audio_data, int audio_len) {
+                              int duration_ms,
+                              const char *audio_ref) {
 
     cJSON *root = cJSON_CreateObject();
 
@@ -576,15 +575,26 @@ esp_err_t app_http_send_alarm(int event_id, uint64_t timestamp, int battery,
 
 
 
+    cJSON_AddNumberToObject(root, "ver", 1);
     cJSON_AddStringToObject(root, "type", "alarm");
-    cJSON_AddNumberToObject(root, "event_id", event_id);
+    char msg_id[64];
+    snprintf(msg_id, sizeof(msg_id), "%s_%llu_%d",
+             app_get_device_id(), (unsigned long long)timestamp, seq);
+    cJSON_AddStringToObject(root, "msg_id", msg_id);
     cJSON_AddStringToObject(root, "device_id", app_get_device_id());
-    cJSON_AddNumberToObject(root, "timestamp", (double)timestamp);
+    cJSON_AddNumberToObject(root, "ts", (double)timestamp);
+    cJSON_AddNumberToObject(root, "seq", seq);
     cJSON_AddNumberToObject(root, "battery", battery);
-    cJSON_AddNumberToObject(root, "status_confirm", status_confirm);
 
     cJSON *payload = cJSON_CreateObject();
+    cJSON_AddStringToObject(payload, "event", event);
+    cJSON_AddStringToObject(payload, "trigger", trigger);
+    if (confidence >= 0) {
+        cJSON_AddNumberToObject(payload, "confidence", confidence);
+    }
+
     cJSON *snapshot = cJSON_CreateObject();
+    cJSON_AddNumberToObject(snapshot, "duration_ms", duration_ms);
     cJSON_AddNumberToObject(snapshot, "freq", IMU_SAMPLE_RATE_HZ);
 
 
@@ -616,24 +626,19 @@ esp_err_t app_http_send_alarm(int event_id, uint64_t timestamp, int battery,
     }
 
     cJSON_AddItemToObject(snapshot, "baro", baro);
-    cJSON_AddItemToObject(payload, "sensor_snapshot", snapshot);
+    cJSON_AddItemToObject(payload, "sensor_clip", snapshot);
 
-    /* location 在 payload 内, 不在根节点 */
-    add_location(payload, lat, lng);
-
-    char *audio_b64 = encode_audio_base64(audio_data, audio_len);
-
-    if (audio_b64) {
-
-        cJSON_AddStringToObject(payload, "audio_clip", audio_b64);
-
-        free(audio_b64);
-
+    if (lat != 0 || lng != 0) {
+        cJSON *loc = cJSON_CreateObject();
+        cJSON_AddNumberToObject(loc, "lat", lat);
+        cJSON_AddNumberToObject(loc, "lng", lng);
+        cJSON_AddItemToObject(root, "loc", loc);
     }
 
-    add_audio_format(payload);
-
-    cJSON_AddNumberToObject(payload, "is_abnormal", 1);
+    /* 音频走独立二进制通道，JSON 只传引用 ID */
+    if (audio_ref && audio_ref[0] != '\0') {
+        cJSON_AddStringToObject(payload, "audio_ref", audio_ref);
+    }
 
     cJSON_AddItemToObject(root, "payload", payload);
 
@@ -658,9 +663,9 @@ esp_err_t app_http_send_alarm(int event_id, uint64_t timestamp, int battery,
 
 
 
-esp_err_t app_http_send_message(uint64_t timestamp, int battery, double lat, double lng,
-
-                                int16_t *audio_data, int audio_len) {
+esp_err_t app_http_send_message(uint64_t timestamp, int seq, int battery,
+                                double lat, double lng,
+                                int duration_ms, const char *audio_ref) {
 
     cJSON *root = cJSON_CreateObject();
 
@@ -672,31 +677,31 @@ esp_err_t app_http_send_message(uint64_t timestamp, int battery, double lat, dou
 
 
 
-    cJSON_AddStringToObject(root, "type", "message");
+    cJSON_AddNumberToObject(root, "ver", 1);
+    cJSON_AddStringToObject(root, "type", "voice_msg");
+    char msg_id[64];
+    snprintf(msg_id, sizeof(msg_id), "%s_%llu_%d",
+             app_get_device_id(), (unsigned long long)timestamp, seq);
+    cJSON_AddStringToObject(root, "msg_id", msg_id);
     cJSON_AddStringToObject(root, "device_id", app_get_device_id());
-
-    cJSON_AddNumberToObject(root, "timestamp", (double)timestamp);
-
+    cJSON_AddNumberToObject(root, "ts", (double)timestamp);
+    cJSON_AddNumberToObject(root, "seq", seq);
     cJSON_AddNumberToObject(root, "battery", battery);
 
-    add_location(root, lat, lng);
+    if (lat != 0 || lng != 0) {
+        cJSON *loc = cJSON_CreateObject();
+        cJSON_AddNumberToObject(loc, "lat", lat);
+        cJSON_AddNumberToObject(loc, "lng", lng);
+        cJSON_AddItemToObject(root, "loc", loc);
+    }
 
 
 
     cJSON *payload = cJSON_CreateObject();
-
-    char *audio_b64 = encode_audio_base64(audio_data, audio_len);
-
-    if (audio_b64) {
-
-        cJSON_AddStringToObject(payload, "audio_data", audio_b64);
-
-        free(audio_b64);
-
+    cJSON_AddNumberToObject(payload, "duration_ms", duration_ms);
+    if (audio_ref && audio_ref[0] != '\0') {
+        cJSON_AddStringToObject(payload, "audio_ref", audio_ref);
     }
-
-    add_audio_format(payload);
-
     cJSON_AddItemToObject(root, "payload", payload);
 
 
@@ -742,15 +747,23 @@ esp_err_t app_http_send_periodic(uint64_t timestamp, int seq_id, int battery,
 
 
 
+    cJSON_AddNumberToObject(root, "ver", 1);
+    cJSON_AddStringToObject(root, "type", "stream");
+    char msg_id[64];
+    snprintf(msg_id, sizeof(msg_id), "%s_%llu_%d",
+             app_get_device_id(), (unsigned long long)timestamp, seq_id);
+    cJSON_AddStringToObject(root, "msg_id", msg_id);
     cJSON_AddStringToObject(root, "device_id", app_get_device_id());
-
-    cJSON_AddNumberToObject(root, "timestamp", (double)timestamp);
-
-    cJSON_AddNumberToObject(root, "seq_id", seq_id);
-
+    cJSON_AddNumberToObject(root, "ts", (double)timestamp);
+    cJSON_AddNumberToObject(root, "seq", seq_id);
     cJSON_AddNumberToObject(root, "battery", battery);
 
-    add_location(root, lat, lng);
+    if (lat != 0 || lng != 0) {
+        cJSON *loc = cJSON_CreateObject();
+        cJSON_AddNumberToObject(loc, "lat", lat);
+        cJSON_AddNumberToObject(loc, "lng", lng);
+        cJSON_AddItemToObject(root, "loc", loc);
+    }
 
 
 
@@ -761,6 +774,7 @@ esp_err_t app_http_send_periodic(uint64_t timestamp, int seq_id, int battery,
 
 
     cJSON *sensor_data = cJSON_CreateObject();
+    cJSON_AddNumberToObject(sensor_data, "freq", IMU_SAMPLE_RATE_HZ);
 
     cJSON *acc = build_xyz_array(acc_data, acc_len);
 
@@ -794,19 +808,19 @@ esp_err_t app_http_send_periodic(uint64_t timestamp, int seq_id, int battery,
 
 
 
-    char *audio_b64 = encode_audio_base64(audio_data, audio_len);
-
-    if (audio_b64) {
-
-        cJSON_AddStringToObject(payload, "audio_data", audio_b64);
-
-        free(audio_b64);
-
-        add_audio_format(payload);
-
+    /* audio_ref: 音频走独立二进制通道 */
+    char audio_ref[128];
+    if (audio_len > 0) {
+        snprintf(audio_ref, sizeof(audio_ref),
+                 "stream_%s_%llu_%d.opus",
+                 app_get_device_id(),
+                 (unsigned long long)timestamp,
+                 seq_id);
+        cJSON_AddStringToObject(payload, "audio_ref", audio_ref);
     }
 
-    cJSON_AddNumberToObject(payload, "is_abnormal", 0);
+    /* anomaly: 0=正常, 1=疑似异常 */
+    cJSON_AddNumberToObject(payload, "anomaly", 0);
 
     cJSON_AddItemToObject(root, "payload", payload);
 

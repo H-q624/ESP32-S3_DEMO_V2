@@ -31,7 +31,7 @@ menu "App Demo Configuration"
     menu "ESP-SR Speech Recognition"
         config APP_SR_ENABLE
             bool "Enable ESP-SR wake word and command recognition"
-            default y
+            default n
             help
                 Use ESP-SR AFE + WakeNet + MultiNet on the SPH0645 microphone.
                 Requires a "model" partition in partitions.csv.
@@ -189,15 +189,15 @@ menu "App Demo Configuration"
 
         config GPS_UART_TX_PIN
             int "GPS UART TX Pin (ESP -> GPS RXD)"
-            default 36
+            default 43
             help
-                ESP32-S3 TX to GPS RXD (GPS_TXD0 = IO36).
+                ESP32-S3 UART0 TX to GPS RXD (U0TXD = IO43).
 
         config GPS_UART_RX_PIN
             int "GPS UART RX Pin (ESP <- GPS TXD)"
-            default 37
+            default 44
             help
-                ESP32-S3 RX from GPS TXD (GPS_RXD0 = IO37).
+                ESP32-S3 UART0 RX from GPS TXD (U0RXD = IO44).
 
         config GPS_ON_OFF_PIN
             int "GPS ON/OFF Pin"
@@ -257,6 +257,26 @@ menu "App Demo Configuration"
             default 45
             help
                 Privacy mode toggle (YSSW = IO45 on schematic v3.0).
+
+        config KEY_NEW1_PIN
+            int "New Button 1 GPIO (IO46)"
+            default 46
+            help
+                New button on IO46.
+
+        config KEY_NEW2_PIN
+            int "New Button 2 GPIO (IO47)"
+            default 47
+            help
+                New button on IO47.
+    endmenu
+
+    menu "PA (Power Amplifier) Configuration"
+        config PA_CTRL_GPIO
+            int "PA Control GPIO"
+            default 21
+            help
+                Power amplifier enable pin (IO21). Active high.
     endmenu
 
     menu "ML307R 4G Module Configuration"
@@ -285,21 +305,21 @@ menu "App Demo Configuration"
             default "cmnet"
     endmenu
 
-    menu "External Flash W25Q64 Configuration"
+    menu "External SPI PSRAM APS1604M Configuration"
         config EXTFLASH_ENABLE
-            bool "Enable external SPI Flash (W25Q64)"
-            default y
+            bool "Enable external SPI PSRAM (APS1604M)"
+            default n
         config EXTFLASH_CS_PIN
-            int "SPI CS Pin"
-            default 9
+            int "SPI PSRAM CS Pin"
+            default 37
         config EXTFLASH_CLK_PIN
-            int "SPI CLK Pin"
-            default 10
+            int "SPI PSRAM CLK Pin"
+            default 36
         config EXTFLASH_MOSI_PIN
-            int "SPI MOSI Pin (DI)"
-            default 12
+            int "SPI PSRAM MOSI Pin (SI)"
+            default 46
         config EXTFLASH_MISO_PIN
-            int "SPI MISO Pin (DO)"
-            default 13
+            int "SPI PSRAM MISO Pin (SO)"
+            default 47
     endmenu
 endmenu

@@ -4,7 +4,7 @@
 #include "esp_timer.h"
 #include "esp_spiffs.h"
 #include "esp_heap_caps.h"
-#include "app_wifi.h"
+#include "app_ml307r.h"
 #include "app_mpu6050.h"
 #include "app_mic.h"
 #include "app_gps.h"
@@ -13,6 +13,8 @@
 #include "app_extflash.h"
 #include "app_speaker.h"
 #include "app_sr.h"
+#include "app_wifi.h"
+#include "mbedtls/base64.h"
 #include "sdkconfig.h"
 #include <cstdio>
 #include <cstdlib>
@@ -24,22 +26,13 @@ static const char *TAG = "main";
 
 #define SAMPLE_RATE_HZ        50
 #define SAMPLES_PER_UPLOAD    (SAMPLE_RATE_HZ * CONFIG_COLLECT_DURATION_SEC)
-#define AUDIO_COLLECT_SAMPLES (SAMPLE_RATE_HZ * 10)  /* first 10s audio */
-#define UPLOAD_INTERVAL_MS    (CONFIG_COLLECT_DURATION_SEC * 1000)
-#define MAX_RETRY_COUNT       3
-#define RETRY_DELAY_MS        2000
+#define COLLECT_INTERVAL_MS   (CONFIG_COLLECT_DURATION_SEC * 1000)
+#define AUDIO_PCM_SAMPLE_RATE 16000
 
 #define SPIFFS_MOUNT_POINT    "/spiffs"
-#define FLASH_DATA_FILE       "/spiffs/sensor_buf.dat"
-#define LAST_JSON_FILE        "/spiffs/last_payload.json"
 #define JSON_BUF_SIZE         72000
 /* JSON 中 IMU 降采样: 采集 50Hz, JSON 每 N 点取 1 (60s/5=600 点, ~35KB JSON) */
 #define IMU_JSON_DECIM        5
-#define FALL_ALARM_EVENT_ID   500
-#define FALL_ALARM_COOLDOWN_MS 60000
-
-/* 每样本二进制存储: 6*float + 1*int16 = 26 bytes */
-#define BYTES_PER_SAMPLE      26
 
 /* 打印当前可用堆内存 */
 #define LOG_FREE_HEAP() \
@@ -57,24 +50,47 @@ static void *alloc_buffer(size_t size, const char *name) {
     return p;
 }
 
+static char s_device_id[32] = ML307R_ESIM_ICCID;
+
+static const char *get_device_id(void) {
+    return s_device_id;
+}
+
+static void update_device_id_from_4g(void) {
+    char iccid[32] = {0};
+    if (ml307r_get_iccid(iccid, sizeof(iccid)) && strlen(iccid) >= 10) {
+        strncpy(s_device_id, iccid, sizeof(s_device_id) - 1);
+        s_device_id[sizeof(s_device_id) - 1] = '\0';
+        ESP_LOGI(TAG, "Device ID from eSIM ICCID: %s", s_device_id);
+    }
+}
+
+static char *encode_audio_base64_local(const int16_t *audio_data, int audio_samples) {
+    if (!audio_data || audio_samples <= 0) {
+        return nullptr;
+    }
+
+    size_t raw_len = (size_t)audio_samples * sizeof(int16_t);
+    size_t base64_len = ((raw_len + 2) / 3) * 4 + 1;
+    char *encoded = (char *)malloc(base64_len);
+    if (!encoded) {
+        return nullptr;
+    }
+
+    size_t out_len = 0;
+    if (mbedtls_base64_encode((unsigned char *)encoded, base64_len, &out_len,
+                              (const unsigned char *)audio_data, raw_len) != 0) {
+        free(encoded);
+        return nullptr;
+    }
+
+    encoded[out_len] = '\0';
+    return encoded;
+}
+
 static APP_MPU6050 *mpu6050 = nullptr;
 static MEMS_MIC *mic = nullptr;
 static ExtFlash *ext_flash = nullptr;
-static uint32_t s_last_fall_alarm_ms = 0;
-
-static esp_err_t send_manual_alarm(float *acc, float *gyro, int imu_samples,
-                                   int16_t *audio, int audio_samples);
-static esp_err_t send_voice_message(int16_t *audio, int audio_samples);
-
-static void fall_alert_task(void *arg) {
-    (void)arg;
-    speaker_beep(2000, 500);
-    vTaskDelete(nullptr);
-}
-
-static void trigger_fall_alert_sound(void) {
-    xTaskCreate(fall_alert_task, "fall_alert", 3072, nullptr, 4, nullptr);
-}
 
 #if CONFIG_APP_SR_ENABLE
 static void on_sr_event(app_sr_event_t evt, int command_id, const char *cmd_str) {
@@ -101,16 +117,21 @@ static void on_sr_event(app_sr_event_t evt, int command_id, const char *cmd_str)
 
 static void handle_pending_sr_events(float *acc, float *gyro, int imu_n,
                                      int16_t *audio, int audio_n) {
+  (void)acc;
+  (void)gyro;
+  (void)imu_n;
+  (void)audio;
+  (void)audio_n;
   app_sr_event_t evt;
   int cmd_id = 0;
   while (app_sr_poll_event(&evt, &cmd_id)) {
     switch (evt) {
       case APP_SR_EVT_CMD_HELP:
       case APP_SR_EVT_CMD_ALARM:
-        send_manual_alarm(acc, gyro, imu_n, audio, audio_n);
+        ESP_LOGI(TAG, "SR alarm action disabled");
         break;
       case APP_SR_EVT_CMD_MESSAGE:
-        send_voice_message(audio, audio_n);
+        ESP_LOGI(TAG, "SR message action disabled");
         break;
       default:
         break;
@@ -138,21 +159,10 @@ static void read_location_for_upload(double *lat, double *lng, bool *has_fix) {
 #endif
 }
 
-static void save_json_snapshot(const char *json, size_t len) {
-    FILE *f = fopen(LAST_JSON_FILE, "wb");
-    if (!f) {
-        ESP_LOGW(TAG, "无法保存 JSON 到 %s", LAST_JSON_FILE);
-        return;
-    }
-    size_t w = fwrite(json, 1, len, f);
-    fclose(f);
-    ESP_LOGI(TAG, "JSON 已保存到 %s (%u bytes)", LAST_JSON_FILE, (unsigned)w);
-}
-
 static void log_round_summary(int imu_n, size_t audio_n, const int16_t *audio,
                               const float *acc, const float *gyro,
                               int battery, bool gps_fix, double lat, double lng,
-                              int json_len, esp_err_t upload_ret) {
+                              int json_len) {
     ESP_LOGI(TAG, "========== 本轮采集汇总 ==========");
     ESP_LOGI(TAG, "IMU: %d samples", imu_n);
     if (imu_n > 0 && acc && gyro) {
@@ -176,20 +186,15 @@ static void log_round_summary(int imu_n, size_t audio_n, const int16_t *audio,
     ESP_LOGI(TAG, "GPS: disabled");
 #endif
     ESP_LOGI(TAG, "JSON: %d bytes", json_len);
-    ESP_LOGI(TAG, "Upload: %s", upload_ret == ESP_OK ? "成功" : "失败(网络不可用或WiFi未连接)");
     ESP_LOGI(TAG, "==================================");
-}
-
-static bool is_wifi_connected(void) {
-    return app_network_is_connected();
 }
 
 static bool init_spiffs(void) {
     esp_vfs_spiffs_conf_t conf = {
         .base_path = SPIFFS_MOUNT_POINT,
-        .partition_label = NULL,
+        .partition_label = "spiffs",
         .max_files = 5,
-        .format_if_mount_failed = true
+        .format_if_mount_failed = false
     };
     esp_err_t ret = esp_vfs_spiffs_register(&conf);
     if (ret != ESP_OK) {
@@ -197,72 +202,9 @@ static bool init_spiffs(void) {
         return false;
     }
     size_t total = 0, used = 0;
-    esp_spiffs_info(NULL, &total, &used);
+    esp_spiffs_info("spiffs", &total, &used);
     ESP_LOGI(TAG, "SPIFFS ready: %u / %u bytes used", (unsigned)used, (unsigned)total);
     return true;
-}
-
-static bool write_sample_to_flash(FILE *f, float acc_x, float acc_y, float acc_z,
-                                   float gyr_x, float gyr_y, float gyr_z,
-                                   int16_t audio) {
-    if (!f) return false;
-    if (fwrite(&acc_x, 4, 1, f) != 1) return false;
-    if (fwrite(&acc_y, 4, 1, f) != 1) return false;
-    if (fwrite(&acc_z, 4, 1, f) != 1) return false;
-    if (fwrite(&gyr_x, 4, 1, f) != 1) return false;
-    if (fwrite(&gyr_y, 4, 1, f) != 1) return false;
-    if (fwrite(&gyr_z, 4, 1, f) != 1) return false;
-    if (fwrite(&audio, 2, 1, f) != 1) return false;
-    return true;
-}
-
-static FILE *open_flash_for_upload(size_t *out_samples) {
-    FILE *f = fopen(FLASH_DATA_FILE, "rb");
-    if (!f) return nullptr;
-
-    fseek(f, 0, SEEK_END);
-    long size = ftell(f);
-    fseek(f, 0, SEEK_SET);
-
-    if (size <= 0 || (size % BYTES_PER_SAMPLE) != 0) {
-        ESP_LOGW(TAG, "Flash file corrupted (%ld bytes), deleting", size);
-        fclose(f);
-        unlink(FLASH_DATA_FILE);
-        return nullptr;
-    }
-
-    *out_samples = (size_t)size / BYTES_PER_SAMPLE;
-    ESP_LOGI(TAG, "Found %u leftover samples on flash", (unsigned)*out_samples);
-    return f;
-}
-
-static int load_samples_from_flash(FILE *f, size_t max_samples,
-                                    float *acc_out, float *gyro_out,
-                                    int16_t *audio_out) {
-    if (!f || !acc_out || !gyro_out || !audio_out) return 0;
-    int count = 0;
-    for (size_t i = 0; i < max_samples; i++) {
-        float ax, ay, az, gx, gy, gz;
-        int16_t aud;
-        if (fread(&ax, 4, 1, f) != 1) break;
-        if (fread(&ay, 4, 1, f) != 1) break;
-        if (fread(&az, 4, 1, f) != 1) break;
-        if (fread(&gx, 4, 1, f) != 1) break;
-        if (fread(&gy, 4, 1, f) != 1) break;
-        if (fread(&gz, 4, 1, f) != 1) break;
-        if (fread(&aud, 2, 1, f) != 1) break;
-
-        int idx = count * 3;
-        acc_out[idx]     = ax;
-        acc_out[idx + 1] = ay;
-        acc_out[idx + 2] = az;
-        gyro_out[idx]     = gx;
-        gyro_out[idx + 1] = gy;
-        gyro_out[idx + 2] = gz;
-        audio_out[count]  = aud;
-        count++;
-    }
-    return count;
 }
 
 /*
@@ -281,12 +223,30 @@ static int build_periodic_json(char *buf, size_t buf_size,
     char *end = buf + buf_size;
     int w = 0;
 
+    /* 外层: 协议通用字段 */
     w = snprintf(p, end - p,
-        "{\"device_id\":\"%s\",\"timestamp\":%llu,\"seq_id\":%d,"
-        "\"battery\":%d,\"location\":{\"lat\":%.6f,\"lng\":%.6f},"
-        "\"payload\":{\"duration_ms\":%d,\"sensor_data\":{",
+        "{\"ver\":1,\"type\":\"stream\","
+        "\"msg_id\":\"%s_%llu_%d\","
+        "\"device_id\":\"%s\","
+        "\"ts\":%llu,"
+        "\"seq\":%d,"
+        "\"battery\":%d,",
         device_id, (unsigned long long)timestamp, seq_id,
-        battery, lat, lng, duration_ms);
+        device_id, (unsigned long long)timestamp, seq_id,
+        battery);
+    if (w < 0 || w >= end - p) return -1;
+    p += w;
+
+    /* loc: 有 GPS 信号时写入，无信号时省略 */
+    if (lat != 0 || lng != 0) {
+        w = snprintf(p, end - p, "\"loc\":{\"lat\":%.6f,\"lng\":%.6f},", lat, lng);
+        if (w < 0 || w >= end - p) return -1;
+        p += w;
+    }
+
+    w = snprintf(p, end - p,
+        "\"payload\":{\"duration_ms\":%d,\"sensor_data\":{\"freq\":%d,",
+        duration_ms, SAMPLE_RATE_HZ);
     if (w < 0 || w >= end - p) return -1;
     p += w;
 
@@ -320,138 +280,29 @@ static int build_periodic_json(char *buf, size_t buf_size,
     if (w < 0 || w >= end - p) return -1;
     p += w;
 
-    w = snprintf(p, end - p, "\"baro\":[]}");
+    w = snprintf(p, end - p, "\"baro\":[]},");
     if (w < 0 || w >= end - p) return -1;
     p += w;
 
-    /* 音频部分 */
+    /* audio_ref: 音频走独立二进制通道，JSON 只传引用 ID */
     if (audio_data && audio_samples > 0) {
-        char *b64 = encode_audio_base64(audio_data, audio_samples);
-        if (b64) {
-            w = snprintf(p, end - p, ",\"audio_data\":\"%s\"", b64);
-            free(b64);
-            if (w < 0 || w >= end - p) return -1;
-            p += w;
-        }
-        w = snprintf(p, end - p, ",\"audio_format\":{\"sr\":%d,\"bit\":16}",
-                     AUDIO_PCM_SAMPLE_RATE);
+        w = snprintf(p, end - p,
+            "\"audio_ref\":\"stream_%s_%llu_%d.opus\"",
+            device_id, (unsigned long long)timestamp, seq_id);
         if (w < 0 || w >= end - p) return -1;
         p += w;
     }
 
-    w = snprintf(p, end - p, ",\"is_abnormal\":%d}}", is_abnormal ? 1 : 0);
+    /* anomaly: 0=正常, 1=疑似异常(端侧预判) */
+    w = snprintf(p, end - p, ",\"anomaly\":%d}}", is_abnormal ? 1 : 0);
     if (w < 0 || w >= end - p) return -1;
     p += w;
 
     return (int)(p - buf);
 }
 
-static esp_err_t send_json_with_retry(const char *api_path, const char *json_str, size_t json_len) {
-    char url[128];
-    snprintf(url, sizeof(url), "http://%s:%d%s", SERVER_IP, HTTP_PORT, api_path);
-
-    for (int retry = 0; retry < MAX_RETRY_COUNT; retry++) {
-        if (!is_wifi_connected()) {
-            ESP_LOGW(TAG, "Network not connected, retry %d/%d", retry + 1, MAX_RETRY_COUNT);
-            vTaskDelay(pdMS_TO_TICKS(RETRY_DELAY_MS));
-            continue;
-        }
-
-        esp_err_t ret = app_http_send_data(url, json_str, json_len);
-        if (ret == ESP_OK) {
-            return ESP_OK;
-        }
-        ESP_LOGW(TAG, "Upload failed (%s), retry %d/%d", esp_err_to_name(ret),
-                 retry + 1, MAX_RETRY_COUNT);
-        vTaskDelay(pdMS_TO_TICKS(RETRY_DELAY_MS));
-    }
-    return ESP_FAIL;
-}
-
-static esp_err_t send_periodic_with_retry(const char *json_str, size_t json_len) {
-    return send_json_with_retry(HTTP_PATH_DATA, json_str, json_len);
-}
-
-/* 算法跌倒报警: 取最近 1 秒 IMU 快照 + 当前音频 */
-static esp_err_t send_fall_alarm(float *acc, float *gyro, int imu_samples,
-                                 int16_t *audio, int audio_samples) {
-    uint32_t now_ms = (uint32_t)(esp_timer_get_time() / 1000);
-    if (s_last_fall_alarm_ms != 0 &&
-        (now_ms - s_last_fall_alarm_ms) < FALL_ALARM_COOLDOWN_MS) {
-        ESP_LOGW(TAG, "跌倒报警冷却中, 跳过重复上报");
-        return ESP_ERR_INVALID_STATE;
-    }
-
-    double lat = 0, lng = 0;
-    bool has_fix = false;
-    read_location_for_upload(&lat, &lng, &has_fix);
-
-    int snap = imu_samples;
-    if (snap > IMU_SAMPLE_RATE_HZ) snap = IMU_SAMPLE_RATE_HZ;
-    if (snap <= 0) return ESP_ERR_INVALID_ARG;
-
-    int offset = (imu_samples - snap) * 3;
-    float *baro_empty = nullptr;
-
-    esp_err_t ret = app_http_send_alarm(
-        FALL_ALARM_EVENT_ID,
-        (uint64_t)(esp_timer_get_time() / 1000),
-        read_battery_for_upload(),
-        lat, lng,
-        0, /* status_confirm: 0=算法自动检测 */
-        acc + offset, snap * 3,
-        gyro + offset, snap * 3,
-        baro_empty, 0,
-        audio, audio_samples);
-
-    if (ret == ESP_OK) {
-        s_last_fall_alarm_ms = now_ms;
-        trigger_fall_alert_sound();
-    }
-    return ret;
-}
-
-/* SW1 手动报警: 取最近 1 秒 IMU 快照 + 当前音频 */
-static esp_err_t send_manual_alarm(float *acc, float *gyro, int imu_samples,
-                                   int16_t *audio, int audio_samples) {
-    double lat = 0, lng = 0;
-    bool has_fix = false;
-    read_location_for_upload(&lat, &lng, &has_fix);
-
-    int snap = imu_samples;
-    if (snap > IMU_SAMPLE_RATE_HZ) snap = IMU_SAMPLE_RATE_HZ;
-    if (snap <= 0) return ESP_ERR_INVALID_ARG;
-
-    int offset = (imu_samples - snap) * 3;
-    float *baro_empty = nullptr;
-
-    return app_http_send_alarm(
-        501,
-        (uint64_t)(esp_timer_get_time() / 1000),
-        read_battery_for_upload(),
-        lat, lng,
-        1, /* status_confirm: 1=手动按键报警 */
-        acc + offset, snap * 3,
-        gyro + offset, snap * 3,
-        baro_empty, 0,
-        audio, audio_samples);
-}
-
-/* SW3 留言: 上传当前音频 */
-static esp_err_t send_voice_message(int16_t *audio, int audio_samples) {
-    double lat = 0, lng = 0;
-    bool has_fix = false;
-    read_location_for_upload(&lat, &lng, &has_fix);
-
-    return app_http_send_message(
-        (uint64_t)(esp_timer_get_time() / 1000),
-        read_battery_for_upload(),
-        lat, lng,
-        audio, audio_samples);
-}
-
 static int collect_to_buffers(float *acc_out, float *gyro_out,
-                                   int16_t *audio_out, FILE *flash_f,
+                                   int16_t *audio_out,
                                    bool *fall_detected_out) {
     mpu6050_acce_value_t acce = {};
     mpu6050_gyro_value_t gyro_sample = {};
@@ -459,8 +310,8 @@ static int collect_to_buffers(float *acc_out, float *gyro_out,
     int count = 0;
     const int period_ms = 1000 / SAMPLE_RATE_HZ;
 
-    ESP_LOGI(TAG, "Collecting %d samples (~60s), audio only first %d samples",
-             SAMPLES_PER_UPLOAD, AUDIO_COLLECT_SAMPLES);
+    ESP_LOGI(TAG, "Collecting %d IMU+audio samples (~%ds)",
+             SAMPLES_PER_UPLOAD, CONFIG_COLLECT_DURATION_SEC);
     uint32_t t0 = (uint32_t)(esp_timer_get_time() / 1000);
 
     int16_t audio_min = 32767, audio_max = -32768;
@@ -489,7 +340,7 @@ static int collect_to_buffers(float *acc_out, float *gyro_out,
         }
 
         int16_t audio_s = 0;
-        if (i < AUDIO_COLLECT_SAMPLES && mic && mic->read_sample_pcm(&pcm)) {
+        if (mic && mic->read_sample_pcm(&pcm)) {
             audio_s = pcm;
             app_mic_append_sample(pcm);
 
@@ -497,14 +348,11 @@ static int collect_to_buffers(float *acc_out, float *gyro_out,
             if (audio_s > audio_max) audio_max = audio_s;
             audio_sum += audio_s;
             audio_samples++;
-        } else if (i < AUDIO_COLLECT_SAMPLES && mic) {
+        } else if (mic) {
             audio_read_fail++;
             if (audio_read_fail == 1) {
                 ESP_LOGW(TAG, "Mic read failed at sample %d", i);
             }
-        } else if (i == AUDIO_COLLECT_SAMPLES) {
-            ESP_LOGI(TAG, "Audio window done: ok=%d fail=%d",
-                     audio_samples, audio_read_fail);
         }
 
         if (got_imu) {
@@ -521,16 +369,9 @@ static int collect_to_buffers(float *acc_out, float *gyro_out,
             if (mpu6050->detect_fall(acce)) {
                 fall_detected = true;
                 ESP_LOGW(TAG, "!!! 跌倒算法触发 (sample %d) !!!", count);
-                size_t audio_n = app_mic_get_upload_pcm(audio_out, count);
-                esp_err_t ar = send_fall_alarm(acc_out, gyro_out, count,
-                                               audio_out, (int)audio_n);
-                ESP_LOGI(TAG, "跌倒报警上传 %s", ar == ESP_OK ? "成功" : "失败");
             }
         }
 
-        if (flash_f && got_imu) {
-            write_sample_to_flash(flash_f, ax, ay, az, gx, gy, gz, audio_s);
-        }
 
 #if CONFIG_APP_SR_ENABLE
         if (got_imu && count > 0) {
@@ -544,25 +385,36 @@ static int collect_to_buffers(float *acc_out, float *gyro_out,
                 ESP_LOGI(TAG, "IMU[%d]: acc=(%.3f,%.3f,%.3f) gyro=(%.2f,%.2f,%.2f)",
                          i, ax, ay, az, gx, gy, gz);
             }
-            if (i < AUDIO_COLLECT_SAMPLES) {
-                ESP_LOGI(TAG, "Audio[%d]: pcm=%d raw=0x%08lx",
-                         i, (int)audio_s, (unsigned long)(uint32_t)app_mic_get_last_raw());
-            }
+            ESP_LOGI(TAG, "Audio[%d]: pcm=%d raw=0x%08lx",
+                     i, (int)audio_s, (unsigned long)(uint32_t)app_mic_get_last_raw());
 #if CONFIG_GPS_ENABLE
             {
                 gps_data_t gps_snap;
+                char gnrmc_raw[128];
                 app_gps_get_data(&gps_snap);
+                if (app_gps_get_last_gnrmc(gnrmc_raw, sizeof(gnrmc_raw))) {
+                    ESP_LOGI(TAG, "GNRMC原始数据: %s", gnrmc_raw);
+                }
                 if (app_gps_has_fix()) {
-                    ESP_LOGI(TAG, "GPS[%d]: fix lat=%.6f lng=%.6f alt=%.1fm sats=%d speed=%.1fkm/h",
-                             i, gps_snap.latitude, gps_snap.longitude,
-                             (double)gps_snap.altitude, gps_snap.satellites,
-                             (double)gps_snap.speed_kmh);
+                    ESP_LOGI(TAG,
+                             "GPS经纬度: latitude=%.6f longitude=%.6f",
+                             gps_snap.latitude, gps_snap.longitude);
                 } else {
-                    ESP_LOGI(TAG, "GPS[%d]: no fix sats=%d qual=%d",
-                             i, gps_snap.satellites, gps_snap.fix_quality);
+                    ESP_LOGI(TAG, "GPS没有接收到准确的数据");
                 }
             }
 #endif
+            int adc_mv = app_battery_read_adc_mv();
+            if (adc_mv >= 0) {
+                int battery_mv = adc_mv * 2; /* 10K/10K divider */
+                ESP_LOGI(TAG,
+                         "Battery[%d]: GPIO7 ADC=%d mV (%.3f V), "
+                         "battery=%d mV (%.3f V)",
+                         i, adc_mv, adc_mv / 1000.0,
+                         battery_mv, battery_mv / 1000.0);
+            } else {
+                ESP_LOGW(TAG, "Battery[%d]: ADC read failed", i);
+            }
         }
 
         vTaskDelay(pdMS_TO_TICKS(period_ms));
@@ -571,7 +423,7 @@ static int collect_to_buffers(float *acc_out, float *gyro_out,
     uint32_t elapsed = (uint32_t)(esp_timer_get_time() / 1000) - t0;
     ESP_LOGI(TAG, "Collection done: %d IMU samples in %lu ms", count, (unsigned long)elapsed);
 
-    /* 音频统计（仅前 10 秒） */
+    /* 整轮音频统计 */
     if (audio_samples > 0) {
         ESP_LOGI(TAG, "Audio stats: min=%d, max=%d, avg=%lld, ok=%d, fail=%d",
                  (int)audio_min, (int)audio_max,
@@ -588,17 +440,42 @@ static int collect_to_buffers(float *acc_out, float *gyro_out,
 }
 
 extern "C" void app_main(void) {
+    ESP_LOGI(TAG, "zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz");
     vTaskDelay(pdMS_TO_TICKS(100));
-    ESP_LOGI(TAG, "=== IMU+MIC 采集上传 (每轮 %ds) ===", CONFIG_COLLECT_DURATION_SEC);
+    ESP_LOGI(TAG, "=== IMU+MIC 本地采集 (每轮 %ds) ===", CONFIG_COLLECT_DURATION_SEC);
 
-    /* ---- 1. Network (WiFi) ---- */
-    ESP_LOGI(TAG, "[1/8] 连接 WiFi: %s...", CONFIG_WIFI_SSID);
-    app_network_init(NET_MODE_WIFI, CONFIG_WIFI_SSID, CONFIG_WIFI_PASSWORD);
-
-    /* ---- 2. SPIFFS ---- */
-    ESP_LOGI(TAG, "[2/8] 初始化 SPIFFS flash 存储...");
+    /*
+     * 首次分区表加载会暂时关闭双核 Flash cache。
+     * 必须在创建应用任务、GPIO ISR 和 UART 驱动前完成 SPIFFS 初始化。
+     */
+    ESP_LOGI(TAG, "[1/8] 初始化 SPIFFS flash 存储...");
     if (!init_spiffs()) {
         ESP_LOGE(TAG, "SPIFFS 初始化失败，仅使用 RAM 缓冲");
+    }
+
+    app_keys_init();
+
+    /* ---- 2. ML307R 4G only (no WiFi, no server connection/upload) ---- */
+    ESP_LOGI(TAG, "[2/8] 初始化 ML307R 4G 网络...");
+    if (ml307r_init() != ESP_OK) {
+        ESP_LOGE(TAG, "ML307R init failed");
+    } else {
+        ml307r_power_on();
+        if (!ml307r_is_alive()) {
+            ESP_LOGE(TAG, "ML307R not responding");
+        } else if (!ml307r_wait_network(ML307R_NETWORK_TIMEOUT_MS)) {
+            ESP_LOGW(TAG, "4G network registration timeout");
+        } else {
+            update_device_id_from_4g();
+            ESP_LOGI(TAG, "4G ready; connecting TCP server 120.53.251.149:8007");
+            if (ml307r_send_hello("120.53.251.149", 8007)) {
+                ESP_LOGI(TAG, "TCP hello sent successfully");
+            } else {
+                ESP_LOGW(TAG, "无法连接服务器，继续执行后续程序");
+            }
+        }
+        /* 通知 app_wifi 模块使用 4G 模式，后续 app_http_send_data 会走 ml307r_http_post */
+        app_network_init(NET_MODE_ML307R, NULL, NULL);
     }
 
     /* ---- 3. GPS (optional) ---- */
@@ -611,12 +488,11 @@ extern "C" void app_main(void) {
         ESP_LOGI(TAG, "GPS 模块已启动");
     }
 #else
-    ESP_LOGI(TAG, "[3/8] GPS 已禁用 (menuconfig: GPS_ENABLE), 上传 lat/lng=0");
+    ESP_LOGI(TAG, "[3/8] GPS 已禁用 (menuconfig: GPS_ENABLE)");
 #endif
 
     /* ---- 4. Keys, Speaker & Battery ---- */
     ESP_LOGI(TAG, "[4/8] 初始化按键/扬声器/电量检测...");
-    app_keys_init();
     if (speaker_init() == ESP_OK) {
         ESP_LOGI(TAG, "Speaker ready (GPIO%d)", SPEAKER_GPIO);
     } else {
@@ -628,11 +504,15 @@ extern "C" void app_main(void) {
         ESP_LOGW(TAG, "Battery ADC init failed");
     }
 
-    /* ---- 5. External Flash ---- */
-    ESP_LOGI(TAG, "[5/8] 初始化外置 Flash W25Q64...");
-    ext_flash = new ExtFlash("ExtFlash");
-    if (ext_flash->init() != ESP_OK) {
-        ESP_LOGW(TAG, "外置 Flash 不可用, 继续使用 SPIFFS");
+    /* ---- 5. External SPI PSRAM ---- */
+    ESP_LOGI(TAG, "[5/8] init external SPI PSRAM APS1604M...");
+    ext_flash = new ExtFlash("ExtPSRAM");
+    esp_err_t psram_ret = ext_flash->init();
+    if (psram_ret == ESP_OK && ext_flash->is_ready()) {
+        ESP_LOGI(TAG, "PSRAM 初始化成功");
+    } else {
+        ESP_LOGW(TAG, "PSRAM 初始化失败: %s, continue with internal RAM/SPIFFS",
+                 esp_err_to_name(psram_ret));
     }
 
     /* ---- 6. MPU9250/6050 ---- */
@@ -690,49 +570,12 @@ extern "C" void app_main(void) {
              (unsigned)acc_bytes, (unsigned)gyro_bytes,
              (unsigned)audio_bytes, (unsigned)JSON_BUF_SIZE, IMU_JSON_DECIM);
 
-    /* 尝试恢复上次上传失败留下的数据 */
-    size_t leftover_n = 0;
-    FILE *leftover_f = open_flash_for_upload(&leftover_n);
-    if (leftover_f && leftover_n > 0 && leftover_n <= (size_t)SAMPLES_PER_UPLOAD) {
-        int recovered = load_samples_from_flash(leftover_f, leftover_n,
-                                                 acc_buf, gyro_buf, audio_buf);
-        fclose(leftover_f);
-        if (recovered > 0) {
-            uint64_t ts_ms = esp_timer_get_time() / 1000;
-            double lat = 0, lng = 0;
-            bool has_fix = false;
-            read_location_for_upload(&lat, &lng, &has_fix);
-            int json_len = build_periodic_json(
-                json_buf, JSON_BUF_SIZE, app_get_device_id(),
-                ts_ms, 0, read_battery_for_upload(), lat, lng,
-                recovered * 1000 / SAMPLE_RATE_HZ,
-                acc_buf, recovered * 3,
-                gyro_buf, recovered * 3,
-                audio_buf, recovered, 0);
-            if (json_len > 0) {
-                ESP_LOGI(TAG, "尝试上传遗留数据 (%d samples)...", recovered);
-                if (send_periodic_with_retry(json_buf, (size_t)json_len) == ESP_OK) {
-                    unlink(FLASH_DATA_FILE);
-                    ESP_LOGI(TAG, "遗留数据上传成功");
-                }
-            }
-        }
-    } else if (leftover_f) {
-        fclose(leftover_f);
-    }
-
-    ESP_LOGI(TAG, "开始循环: 每60s上传一次(IMU全60s, 音频仅前10s), 同步写flash");
+    ESP_LOGI(TAG, "开始循环: 每60s本地采集一次(IMU和音频全程采集), 同步写flash");
 
     int seq_id = 0;
     while (1) {
         seq_id++;
         ESP_LOGI(TAG, "===== 第 %d 轮采集开始 =====", seq_id);
-
-        /* 打开 flash 文件用于写入本轮数据 */
-        FILE *flash_f = fopen(FLASH_DATA_FILE, "wb");
-        if (!flash_f) {
-            ESP_LOGW(TAG, "无法打开 flash 文件, 本轮不持久化");
-        }
 
         /* 采集数据 */
         uint32_t t0 = (uint32_t)(esp_timer_get_time() / 1000);
@@ -741,14 +584,8 @@ extern "C" void app_main(void) {
             mpu6050->reset_fall_detector();
         }
         bool fall_detected = false;
-        int n = collect_to_buffers(acc_buf, gyro_buf, audio_buf, flash_f,
+        int n = collect_to_buffers(acc_buf, gyro_buf, audio_buf,
                                    &fall_detected);
-
-        /* 关闭 flash 文件 */
-        if (flash_f) {
-            fflush(flash_f);
-            fclose(flash_f);
-        }
 
         uint32_t t1 = (uint32_t)(esp_timer_get_time() / 1000);
         int duration_ms = (int)(t1 - t0);
@@ -760,21 +597,9 @@ extern "C" void app_main(void) {
                  n, (unsigned)audio_n, duration_ms);
 
         if (n == 0) {
-            ESP_LOGW(TAG, "无 IMU 数据, 跳过上传");
+            ESP_LOGW(TAG, "无 IMU 数据, 跳过本轮处理");
             vTaskDelay(pdMS_TO_TICKS(1000));
             continue;
-        }
-
-        /* 按键: SW1=手动报警, SW3=留言 */
-        if (app_key_sw1_pressed()) {
-            ESP_LOGI(TAG, "SW1 手动报警");
-            esp_err_t ar = send_manual_alarm(acc_buf, gyro_buf, n, audio_buf, (int)audio_n);
-            ESP_LOGI(TAG, "报警包上传 %s", ar == ESP_OK ? "成功" : "失败");
-        }
-        if (app_key_sw3_pressed()) {
-            ESP_LOGI(TAG, "SW3 留言");
-            esp_err_t mr = send_voice_message(audio_buf, (int)audio_n);
-            ESP_LOGI(TAG, "留言包上传 %s", mr == ESP_OK ? "成功" : "失败");
         }
 
         double use_lat = 0, use_lng = 0;
@@ -785,7 +610,7 @@ extern "C" void app_main(void) {
 
         uint64_t ts_ms = esp_timer_get_time() / 1000;
         int json_len = build_periodic_json(
-            json_buf, JSON_BUF_SIZE, app_get_device_id(),
+            json_buf, JSON_BUF_SIZE, get_device_id(),
             ts_ms, seq_id, battery, use_lat, use_lng,
             duration_ms,
             acc_buf, n * 3,
@@ -799,24 +624,26 @@ extern "C" void app_main(void) {
             continue;
         }
 
-        save_json_snapshot(json_buf, (size_t)json_len);
+        /* 发送到服务器 */
+        char upload_url[128];
+        snprintf(upload_url, sizeof(upload_url),
+                 "http://%s:%d%s", SERVER_IP, HTTP_PORT, HTTP_PATH_DATA);
+        esp_err_t upload_err = app_http_send_data(upload_url, json_buf, (size_t)json_len);
+        if (upload_err != ESP_OK) {
+            ESP_LOGE(TAG, "上传失败: %s", esp_err_to_name(upload_err));
+        } else {
+            ESP_LOGI(TAG, "上传成功 (%d bytes)", json_len);
+        }
 
-        esp_err_t ret = send_periodic_with_retry(json_buf, (size_t)json_len);
         log_round_summary(n, audio_n, audio_buf, acc_buf, gyro_buf,
                           battery, has_gps_fix, use_lat, use_lng,
-                          json_len, ret);
-
-        if (ret == ESP_OK) {
-            ESP_LOGI(TAG, "第 %d 轮上传成功", seq_id);
-            unlink(FLASH_DATA_FILE);
-        } else {
-            ESP_LOGW(TAG, "第 %d 轮上传失败, JSON 已存 %s", seq_id, LAST_JSON_FILE);
-        }
+                          json_len);
+        ESP_LOGI(TAG, "第 %d 轮采集完成", seq_id);
 
         /* 计算到下一轮需要等待的时间 */
         uint32_t t2 = (uint32_t)(esp_timer_get_time() / 1000);
         int elapsed_since_start = (int)(t2 - t0);
-        int wait_ms = UPLOAD_INTERVAL_MS - elapsed_since_start;
+        int wait_ms = COLLECT_INTERVAL_MS - elapsed_since_start;
         if (wait_ms < 0) wait_ms = 0;
         if (wait_ms > 0) {
             ESP_LOGI(TAG, "等待 %d ms 到下一轮...", wait_ms);

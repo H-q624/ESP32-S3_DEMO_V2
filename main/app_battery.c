@@ -1,5 +1,7 @@
 #include "app_battery.h"
 #include "driver/gpio.h"
+#include "esp_adc/adc_cali.h"
+#include "esp_adc/adc_cali_scheme.h"
 #include "esp_adc/adc_oneshot.h"
 #include "esp_log.h"
 #include <stdlib.h>
@@ -8,10 +10,29 @@ static const char *TAG = "BATTERY";
 
 static adc_oneshot_unit_handle_t s_adc = NULL;
 static adc_channel_t s_adc_channel = ADC_CHANNEL_6; /* GPIO7 = ADC1_CH6 on ESP32-S3 */
+static adc_cali_handle_t s_adc_cali = NULL;
 static bool s_ready = false;
+
+static bool bat_led_pin_available(gpio_num_t pin) {
+    if (!GPIO_IS_VALID_OUTPUT_GPIO(pin)) {
+        return false;
+    }
+#if CONFIG_EXTFLASH_ENABLE
+    if ((int)pin == CONFIG_EXTFLASH_CS_PIN ||
+        (int)pin == CONFIG_EXTFLASH_CLK_PIN ||
+        (int)pin == CONFIG_EXTFLASH_MOSI_PIN ||
+        (int)pin == CONFIG_EXTFLASH_MISO_PIN) {
+        return false;
+    }
+#endif
+    return true;
+}
 
 /* 共阳 LED: 拉低点亮, 拉高熄灭 */
 static void bat_led_set(gpio_num_t pin, bool on) {
+    if (!bat_led_pin_available(pin)) {
+        return;
+    }
     gpio_set_level(pin, on ? 0 : 1);
 }
 
@@ -23,17 +44,35 @@ static int mv_to_percent(int mv) {
 }
 
 esp_err_t app_battery_init(void) {
-    /* 电量 LED: IO46/47/48, 共阳, 默认全灭 */
+    /*
+     * IO46/IO47 are now APS1604M SI/SO.  Build the LED mask dynamically so
+     * battery indication can never reconfigure or drive an external-RAM pin.
+     */
+    const gpio_num_t led_pins[] = {
+        (gpio_num_t)BATTERY_LED1_GPIO,
+        (gpio_num_t)BATTERY_LED2_GPIO,
+        (gpio_num_t)BATTERY_LED3_GPIO,
+    };
+    uint64_t led_mask = 0;
+    for (size_t i = 0; i < sizeof(led_pins) / sizeof(led_pins[0]); ++i) {
+        if (bat_led_pin_available(led_pins[i])) {
+            led_mask |= 1ULL << led_pins[i];
+        } else {
+            ESP_LOGW(TAG, "Battery LED GPIO%d disabled (reserved by APS1604M)",
+                     (int)led_pins[i]);
+        }
+    }
+
     gpio_config_t led_cfg = {
-        .pin_bit_mask = (1ULL << BATTERY_LED1_GPIO) |
-                        (1ULL << BATTERY_LED2_GPIO) |
-                        (1ULL << BATTERY_LED3_GPIO),
+        .pin_bit_mask = led_mask,
         .mode         = GPIO_MODE_OUTPUT,
         .pull_up_en   = GPIO_PULLUP_DISABLE,
         .pull_down_en = GPIO_PULLDOWN_DISABLE,
         .intr_type    = GPIO_INTR_DISABLE,
     };
-    gpio_config(&led_cfg);
+    if (led_mask != 0) {
+        gpio_config(&led_cfg);
+    }
     bat_led_set((gpio_num_t)BATTERY_LED1_GPIO, false);
     bat_led_set((gpio_num_t)BATTERY_LED2_GPIO, false);
     bat_led_set((gpio_num_t)BATTERY_LED3_GPIO, false);
@@ -69,14 +108,29 @@ esp_err_t app_battery_init(void) {
         return ret;
     }
 
+    adc_cali_curve_fitting_config_t cali_cfg = {
+        .unit_id = ADC_UNIT_1,
+        .chan = s_adc_channel,
+        .atten = ADC_ATTEN_DB_12,
+        .bitwidth = ADC_BITWIDTH_DEFAULT,
+    };
+    ret = adc_cali_create_scheme_curve_fitting(&cali_cfg, &s_adc_cali);
+    if (ret != ESP_OK) {
+        s_adc_cali = NULL;
+        ESP_LOGW(TAG, "ADC calibration unavailable (%s), using raw conversion",
+                 esp_err_to_name(ret));
+    }
+
     s_ready = true;
-    ESP_LOGI(TAG, "Battery ADC on IO%d (CH%d), LEDs IO%d/IO%d/IO%d (common-anode)",
+    ESP_LOGI(TAG, "Battery ADC enabled: GPIO%d = ADC1_CH%d, calibration=%s",
              BATTERY_ADC_GPIO, (int)s_adc_channel,
+             s_adc_cali ? "curve-fitting" : "raw fallback");
+    ESP_LOGI(TAG, "Battery LEDs: GPIO%d/GPIO%d/GPIO%d (common-anode)",
              BATTERY_LED1_GPIO, BATTERY_LED2_GPIO, BATTERY_LED3_GPIO);
     return ESP_OK;
 }
 
-int app_battery_read_mv(void) {
+int app_battery_read_adc_mv(void) {
     if (!s_ready || !s_adc) return -1;
 
     int raw_sum = 0;
@@ -90,11 +144,25 @@ int app_battery_read_mv(void) {
     }
     int raw_avg = raw_sum / samples;
 
-    /* ESP32-S3 ADC @12dB: 约 0~3300mV 量程, 12bit */
     int adc_mv = (raw_avg * 3300) / 4095;
-    int bat_mv = adc_mv * 2; /* 10K/10K 分压 */
+    if (s_adc_cali &&
+        adc_cali_raw_to_voltage(s_adc_cali, raw_avg, &adc_mv) != ESP_OK) {
+        adc_mv = (raw_avg * 3300) / 4095;
+    }
+    return adc_mv;
+}
 
-    return bat_mv;
+int app_battery_read_mv(void) {
+    int adc_mv = app_battery_read_adc_mv();
+    if (adc_mv < 0) return -1;
+
+    /*
+     * 10K/10K voltage divider:
+     * Vadc = Vbattery * Rbottom / (Rtop + Rbottom)
+     * Vbattery = Vadc * (Rtop + Rbottom) / Rbottom
+     *          = Vadc * (10K + 10K) / 10K = Vadc * 2
+     */
+    return adc_mv * 2;
 }
 
 int app_battery_read_percent(void) {

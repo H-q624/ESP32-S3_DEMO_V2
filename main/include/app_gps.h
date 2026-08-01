@@ -5,6 +5,7 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "esp_err.h"
+#include <stddef.h>
 #include <stdint.h>
 #include <stdbool.h>
 
@@ -12,9 +13,9 @@
 extern "C" {
 #endif
 
-#define GPS_UART_NUM          UART_NUM_2
-#define GPS_TX_PIN            CONFIG_GPS_UART_TX_PIN   /* ESP TX -> GPS RXD (IO36) */
-#define GPS_RX_PIN            CONFIG_GPS_UART_RX_PIN   /* ESP RX <- GPS TXD (IO37) */
+#define GPS_UART_NUM          UART_NUM_0
+#define GPS_TX_PIN            CONFIG_GPS_UART_TX_PIN   /* ESP UART0 TX -> GPS RXD */
+#define GPS_RX_PIN            CONFIG_GPS_UART_RX_PIN   /* ESP UART0 RX <- GPS TXD */
 #define GPS_BAUDRATE          CONFIG_GPS_UART_BAUDRATE
 #define GPS_UART_BUF_SIZE     1024
 #define GPS_ON_OFF_PIN        CONFIG_GPS_ON_OFF_PIN
@@ -44,6 +45,7 @@ void app_gps_power_on(void);
 void app_gps_power_off(void);
 void app_gps_get_data(gps_data_t *out);
 bool app_gps_has_fix(void);
+bool app_gps_get_last_gnrmc(char *out, size_t out_size);
 
 #ifdef __cplusplus
 }

@@ -1,5 +1,4 @@
 #include "app_ml307r.h"
-#include "app_wifi.h"
 #include "driver/uart.h"
 #include "driver/gpio.h"
 #include "esp_log.h"
@@ -20,6 +19,13 @@ static const char *TAG = "ML307R";
 static bool s_initialized = false;
 static bool s_network_ready = false;
 static char s_iccid[32] = {0};
+/*
+ * AT responses can be up to ML307R_RX_BUF_SIZE bytes.  Do not put this
+ * buffer on app_main's stack: the previous 4096-byte local array was larger
+ * than CONFIG_ESP_MAIN_TASK_STACK_SIZE (3584) and corrupted the task stack.
+ * All AT access is serialized by the current modem implementation.
+ */
+static char s_at_response[ML307R_RX_BUF_SIZE];
 
 /* ---- 低层 UART ---- */
 
@@ -41,17 +47,17 @@ static void uart_write_cmd(const char *cmd) {
 static bool uart_read_until(const char *expect, int timeout_ms,
                             char *out_buf, size_t out_size,
                             bool wait_prompt) {
-    char acc[ML307R_RX_BUF_SIZE];
     int total = 0;
     uint32_t t0 = (uint32_t)(esp_timer_get_time() / 1000);
 
+    s_at_response[0] = '\0';
     while (1) {
         uint8_t ch;
         int n = uart_read_bytes(ML307R_UART_NUM, &ch, 1, pdMS_TO_TICKS(50));
         if (n > 0) {
-            if (total < (int)(sizeof(acc) - 1)) {
-                acc[total++] = (char)ch;
-                acc[total] = '\0';
+            if (total < (int)(sizeof(s_at_response) - 1)) {
+                s_at_response[total++] = (char)ch;
+                s_at_response[total] = '\0';
             }
             if (out_buf && total <= (int)out_size - 1) {
                 out_buf[total - 1] = (char)ch;
@@ -59,10 +65,10 @@ static bool uart_read_until(const char *expect, int timeout_ms,
             }
         }
 
-        if (wait_prompt && total > 0 && acc[total - 1] == '>') {
+        if (wait_prompt && total > 0 && s_at_response[total - 1] == '>') {
             return true;
         }
-        if (expect && strstr(acc, expect) != NULL) {
+        if (expect && strstr(s_at_response, expect) != NULL) {
             return true;
         }
 
@@ -71,7 +77,7 @@ static bool uart_read_until(const char *expect, int timeout_ms,
             if (out_buf && total < (int)out_size) out_buf[total] = '\0';
             if (total > 0) {
                 ESP_LOGD(TAG, "RX timeout (%d ms), got: %.120s%s",
-                         timeout_ms, acc, total > 120 ? "..." : "");
+                         timeout_ms, s_at_response, total > 120 ? "..." : "");
             }
             return false;
         }
@@ -106,60 +112,6 @@ static bool ml307r_at_retry(const char *cmd, const char *expect,
         vTaskDelay(pdMS_TO_TICKS(500));
     }
     return false;
-}
-
-/* ---- URL 解析 ---- */
-
-typedef struct {
-    char host[64];
-    char path[128];
-    int port;
-    bool ssl;
-} url_parts_t;
-
-static bool parse_http_url(const char *url, url_parts_t *out) {
-    if (!url || !out) return false;
-    memset(out, 0, sizeof(*out));
-    out->port = 80;
-
-    const char *p = url;
-    if (strncmp(p, "https://", 8) == 0) {
-        out->ssl = true;
-        out->port = 443;
-        p += 8;
-    } else if (strncmp(p, "http://", 7) == 0) {
-        p += 7;
-    } else {
-        return false;
-    }
-
-    const char *slash = strchr(p, '/');
-    const char *colon = strchr(p, ':');
-    if (colon && (!slash || colon < slash)) {
-        size_t hlen = (size_t)(colon - p);
-        if (hlen >= sizeof(out->host)) return false;
-        memcpy(out->host, p, hlen);
-        out->host[hlen] = '\0';
-        out->port = atoi(colon + 1);
-        if (slash) {
-            strncpy(out->path, slash, sizeof(out->path) - 1);
-        } else {
-            strcpy(out->path, "/");
-        }
-    } else {
-        if (slash) {
-            size_t hlen = (size_t)(slash - p);
-            if (hlen >= sizeof(out->host)) return false;
-            memcpy(out->host, p, hlen);
-            out->host[hlen] = '\0';
-            strncpy(out->path, slash, sizeof(out->path) - 1);
-        } else {
-            strncpy(out->host, p, sizeof(out->host) - 1);
-            strcpy(out->path, "/");
-        }
-    }
-    if (out->path[0] == '\0') strcpy(out->path, "/");
-    return out->host[0] != '\0';
 }
 
 /* ---- 初始化 / 电源 ---- */
@@ -373,10 +325,8 @@ static void ml307r_log_iccid(void) {
         if (ml307r_at_send(cmds[i], "ICCID", ML307R_AT_SHORT_TIMEOUT, buf, sizeof(buf))) {
             ml307r_parse_iccid(buf);
             ESP_LOGI(TAG, "SIM/eSIM ICCID: %s", s_iccid[0] ? s_iccid : buf);
-            if (s_iccid[0] && strstr(s_iccid, ML307R_ESIM_ICCID) != NULL) {
-                ESP_LOGI(TAG, "ICCID matched expected eSIM");
-            } else if (s_iccid[0]) {
-                ESP_LOGW(TAG, "ICCID mismatch (expected prefix %s)", ML307R_ESIM_ICCID);
+            if (s_iccid[0]) {
+                ESP_LOGI(TAG, "Using eSIM ICCID: %s", s_iccid);
             }
             return;
         }
@@ -479,131 +429,127 @@ bool ml307r_is_connected(void) {
     return s_network_ready;
 }
 
-/* ---- TCP 裸 HTTP POST (支持大 JSON) ---- */
+bool ml307r_send_hello(const char *server_ip, uint16_t server_port) {
+    static const int socket_id = 0;
+    static const char payload[] = "hello";
+    char cmd[96];
+    char response[256];
 
-static int parse_http_status(const char *resp) {
-    if (!resp) return 0;
-    const char *p = strstr(resp, "HTTP/1.");
-    if (!p) {
-        p = strstr(resp, "HTTP/2");
+    if (!server_ip || server_ip[0] == '\0' || server_port == 0 || !s_network_ready) {
+        return false;
     }
-    if (!p) return 0;
-    p = strchr(p, ' ');
-    if (!p) return 0;
-    while (*p == ' ') p++;
-    return atoi(p);
+
+    /* 清理可能由上次异常退出遗留的 0 号 socket。 */
+    snprintf(cmd, sizeof(cmd), "AT+MIPCLOSE=%d\r\n", socket_id);
+    ml307r_at_send(cmd, "OK", ML307R_AT_TIMEOUT_MS, NULL, 0);
+
+    snprintf(cmd, sizeof(cmd), "AT+MIPOPEN=%d,\"TCP\",\"%s\",%u\r\n",
+             socket_id, server_ip, (unsigned)server_port);
+    if (!ml307r_at_send(cmd, "OK", 10000, response, sizeof(response))) {
+        return false;
+    }
+
+    /* MIPOPEN 在部分固件上异步完成，通过状态查询确认真正连接成功。 */
+    bool connected = false;
+    for (int i = 0; i < 5; ++i) {
+        snprintf(cmd, sizeof(cmd), "AT+MIPSTATE=%d\r\n", socket_id);
+        if (ml307r_at_send(cmd, "CONNECTED", 2000, response, sizeof(response))) {
+            connected = true;
+            break;
+        }
+        vTaskDelay(pdMS_TO_TICKS(500));
+    }
+    if (!connected) {
+        snprintf(cmd, sizeof(cmd), "AT+MIPCLOSE=%d\r\n", socket_id);
+        ml307r_at_send(cmd, "OK", ML307R_AT_TIMEOUT_MS, NULL, 0);
+        return false;
+    }
+
+    snprintf(cmd, sizeof(cmd), "AT+MIPSEND=%d,%u\r\n",
+             socket_id, (unsigned)(sizeof(payload) - 1));
+    bool sent = false;
+    if (ml307r_at_send(cmd, ">", ML307R_AT_TIMEOUT_MS, NULL, 0)) {
+        uart_write_raw(payload, sizeof(payload) - 1);
+        sent = uart_read_until("OK", ML307R_AT_TIMEOUT_MS,
+                               response, sizeof(response), false);
+    }
+
+    snprintf(cmd, sizeof(cmd), "AT+MIPCLOSE=%d\r\n", socket_id);
+    ml307r_at_send(cmd, "OK", ML307R_AT_TIMEOUT_MS, NULL, 0);
+    return sent;
 }
 
-static esp_err_t ml307r_http_post_tcp(const url_parts_t *url,
-                                      const char *data, size_t data_len) {
-    char cmd[160];
-    char header[512];
-    char resp[ML307R_RX_BUF_SIZE];
+esp_err_t ml307r_http_post(const char *path, const char *data, size_t data_len) {
+    static const int socket_id = 0;
+    static const char server_ip[] = "120.53.251.149";
+    static const uint16_t server_port = 8007;
+    char cmd[96];
+    char response[256];
 
-    if (url->ssl) {
-        ESP_LOGE(TAG, "HTTPS not supported via TCP path, use http://");
-        return ESP_ERR_NOT_SUPPORTED;
+    if (!path || !data || data_len == 0 || !s_network_ready) {
+        return ESP_ERR_INVALID_ARG;
     }
 
-    ESP_LOGI(TAG, "TCP POST %s:%d%s (%u bytes)", url->host, url->port, url->path,
-             (unsigned)data_len);
+    /* 关闭可能遗留的 socket */
+    snprintf(cmd, sizeof(cmd), "AT+MIPCLOSE=%d\r\n", socket_id);
+    ml307r_at_send(cmd, "OK", ML307R_AT_TIMEOUT_MS, NULL, 0);
 
-    ml307r_at_send("AT+MIPCLOSE=0\r\n", "OK", ML307R_AT_TIMEOUT_MS, NULL, 0);
-    vTaskDelay(pdMS_TO_TICKS(300));
-
-    snprintf(cmd, sizeof(cmd), "AT+MIPOPEN=0,\"TCP\",\"%s\",%d\r\n", url->host, url->port);
-    if (!ml307r_at_send(cmd, "OK", ML307R_TCP_OPEN_TIMEOUT, resp, sizeof(resp))) {
-        ESP_LOGE(TAG, "MIPOPEN failed: %.80s", resp);
+    /* 建立 TCP 连接 */
+    snprintf(cmd, sizeof(cmd), "AT+MIPOPEN=%d,\"TCP\",\"%s\",%u\r\n",
+             socket_id, server_ip, (unsigned)server_port);
+    if (!ml307r_at_send(cmd, "OK", 10000, response, sizeof(response))) {
         return ESP_FAIL;
     }
-    vTaskDelay(pdMS_TO_TICKS(500));
 
-    int hdr_len = snprintf(header, sizeof(header),
+    /* 等待连接真正建立 */
+    bool connected = false;
+    for (int i = 0; i < 5; i++) {
+        snprintf(cmd, sizeof(cmd), "AT+MIPSTATE=%d\r\n", socket_id);
+        if (ml307r_at_send(cmd, "CONNECTED", 2000, response, sizeof(response))) {
+            connected = true;
+            break;
+        }
+        vTaskDelay(pdMS_TO_TICKS(500));
+    }
+    if (!connected) {
+        snprintf(cmd, sizeof(cmd), "AT+MIPCLOSE=%d\r\n", socket_id);
+        ml307r_at_send(cmd, "OK", ML307R_AT_TIMEOUT_MS, NULL, 0);
+        return ESP_FAIL;
+    }
+
+    /* 构造 HTTP POST 请求并通过 MIPSEND 发送 */
+    char *http_req = malloc(256 + data_len);
+    if (!http_req) return ESP_ERR_NO_MEM;
+
+    int header_len = snprintf(http_req, 256,
         "POST %s HTTP/1.1\r\n"
         "Host: %s:%d\r\n"
         "Content-Type: application/json\r\n"
         "Content-Length: %u\r\n"
         "Connection: close\r\n"
         "\r\n",
-        url->path, url->host, url->port, (unsigned)data_len);
-    if (hdr_len <= 0 || hdr_len >= (int)sizeof(header)) {
-        ml307r_at_send("AT+MIPCLOSE=0\r\n", "OK", ML307R_AT_TIMEOUT_MS, NULL, 0);
+        path, server_ip, server_port, (unsigned)data_len);
+
+    memcpy(http_req + header_len, data, data_len);
+    int total_len = header_len + (int)data_len;
+
+    snprintf(cmd, sizeof(cmd), "AT+MIPSEND=%d,%d\r\n", socket_id, total_len);
+    if (!ml307r_at_send(cmd, ">", ML307R_AT_TIMEOUT_MS, NULL, 0)) {
+        free(http_req);
+        snprintf(cmd, sizeof(cmd), "AT+MIPCLOSE=%d\r\n", socket_id);
+        ml307r_at_send(cmd, "OK", ML307R_AT_TIMEOUT_MS, NULL, 0);
         return ESP_FAIL;
     }
 
-    size_t total = (size_t)hdr_len + data_len;
-    char send_cmd[48];
-    snprintf(send_cmd, sizeof(send_cmd), "AT+MIPSEND=0,%u\r\n", (unsigned)total);
-    if (!ml307r_at_send(send_cmd, ">", ML307R_AT_TIMEOUT_MS, NULL, 0)) {
-        ESP_LOGE(TAG, "MIPSEND prompt failed");
-        ml307r_at_send("AT+MIPCLOSE=0\r\n", "OK", ML307R_AT_TIMEOUT_MS, NULL, 0);
-        return ESP_FAIL;
-    }
+    uart_write_raw(http_req, total_len);
+    free(http_req);
 
-    uart_write_raw(header, (size_t)hdr_len);
-    uart_write_raw(data, data_len);
+    /* 等待发送完成 */
+    bool ok = uart_read_until("OK", ML307R_AT_TIMEOUT_MS, response, sizeof(response), false);
 
-    resp[0] = '\0';
-    bool got_resp = uart_read_until("+MIPURC:", ML307R_HTTP_TIMEOUT_MS, resp, sizeof(resp), false);
-    if (!got_resp) {
-        got_resp = uart_read_until("HTTP/1.", ML307R_HTTP_TIMEOUT_MS, resp, sizeof(resp), false);
-    }
+    /* 关闭连接 */
+    snprintf(cmd, sizeof(cmd), "AT+MIPCLOSE=%d\r\n", socket_id);
+    ml307r_at_send(cmd, "OK", ML307R_AT_TIMEOUT_MS, NULL, 0);
 
-    int status = parse_http_status(resp);
-    ESP_LOGI(TAG, "TCP response status=%d, snippet: %.120s", status,
-             resp[0] ? resp : "(empty)");
-
-    ml307r_at_send("AT+MIPCLOSE=0\r\n", "OK", ML307R_AT_TIMEOUT_MS, NULL, 0);
-
-    if (status >= 200 && status < 300) {
-        return ESP_OK;
-    }
-    if (status == 0 && got_resp) {
-        /* 部分服务器响应格式不同, 有数据即认为成功 */
-        return ESP_OK;
-    }
-    return ESP_FAIL;
-}
-
-/* ---- 公开 HTTP POST ---- */
-
-esp_err_t ml307r_http_post(const char *url, const char *data, size_t data_len) {
-    if (!s_network_ready) {
-        ESP_LOGW(TAG, "Network flag false, retry PDP...");
-        if (!ml307r_activate_pdp()) {
-            ESP_LOGE(TAG, "Network not ready");
-            return ESP_FAIL;
-        }
-        s_network_ready = true;
-    }
-
-    url_parts_t parts;
-    if (!parse_http_url(url, &parts)) {
-        ESP_LOGE(TAG, "Invalid URL: %s", url);
-        return ESP_ERR_INVALID_ARG;
-    }
-
-    /* 持续上传 JSON 体积大 (~65KB), 统一走 TCP 裸 HTTP */
-    return ml307r_http_post_tcp(&parts, data, data_len);
-}
-
-/* ---- 协议 JSON 上传 (持续包 / 报警 / 留言) ---- */
-
-static esp_err_t ml307r_post_api(const char *api_path, const char *json, size_t len) {
-    char url[160];
-    snprintf(url, sizeof(url), "http://%s:%d%s", SERVER_IP, HTTP_PORT, api_path);
-    ESP_LOGI(TAG, "ML307R POST %s (%u bytes)", api_path, (unsigned)len);
-    return ml307r_http_post(url, json, len);
-}
-
-esp_err_t ml307r_upload_data(const char *json, size_t len) {
-    return ml307r_post_api(HTTP_PATH_DATA, json, len);
-}
-
-esp_err_t ml307r_upload_alarm(const char *json, size_t len) {
-    return ml307r_post_api(HTTP_PATH_ALARM, json, len);
-}
-
-esp_err_t ml307r_upload_message(const char *json, size_t len) {
-    return ml307r_post_api(HTTP_PATH_MESSAGE, json, len);
+    return ok ? ESP_OK : ESP_FAIL;
 }

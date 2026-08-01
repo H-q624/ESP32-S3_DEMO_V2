@@ -37,21 +37,8 @@ extern "C" {
 #define ML307R_AT_TIMEOUT_MS      3000
 #define ML307R_AT_SHORT_TIMEOUT   500
 #define ML307R_NETWORK_TIMEOUT_MS 60000
-#define ML307R_HTTP_TIMEOUT_MS    120000
-#define ML307R_TCP_OPEN_TIMEOUT   30000
 #define ML307R_RX_BUF_SIZE        4096
 #define ML307R_AT_RETRY           3
-
-/* MHTTP 内联 POST 上限 (超过则走 TCP 裸 HTTP) */
-#define ML307R_MHTTP_MAX_BODY     1500
-
-/*
- * 服务器 JSON 协议 (ML307R TCP POST):
- *   持续上传包 -> ml307r_upload_data()   POST /api/data
- *   异常报警包 -> ml307r_upload_alarm()  POST /api/alarm
- *   留言包     -> ml307r_upload_message() POST /api/message
- * 也可通过 app_http_send_periodic/alarm/message() 自动路由到 ML307R。
- */
 
 /* ================================================================
  *  公开 API
@@ -65,27 +52,19 @@ bool ml307r_wait_network(int timeout_ms);
 bool ml307r_is_connected(void);
 int ml307r_get_csq(void);
 
-/**
- * @brief 通过 ML307R 发送 HTTP POST (自动选择 MHTTP 或 TCP)
- * @param url      完整 URL, 如 "http://182.92.156.138:8007/api/data"
- * @param data     JSON 请求体
- * @param data_len 请求体长度
- */
-esp_err_t ml307r_http_post(const char *url, const char *data, size_t data_len);
+/** 连接指定 TCP 服务器并发送一次 hello；任何失败均返回 false */
+bool ml307r_send_hello(const char *server_ip, uint16_t server_port);
 
 /** 读取模组 ICCID (eSIM), 失败返回 false */
 bool ml307r_get_iccid(char *buf, size_t buf_size);
-
-/** 按协议路径上传 JSON (TCP HTTP POST) */
-esp_err_t ml307r_upload_data(const char *json, size_t len);
-esp_err_t ml307r_upload_alarm(const char *json, size_t len);
-esp_err_t ml307r_upload_message(const char *json, size_t len);
 
 bool ml307r_at_send(const char *cmd, const char *expect, int timeout_ms,
                     char *out_buf, size_t out_size);
 
 /** 4G 开机完成后释放 PWR 引脚 (与电池 ADC 共用 IO7 时) */
 void ml307r_release_pwr_pin(void);
+
+esp_err_t ml307r_http_post(const char *path, const char *data, size_t data_len);
 
 #ifdef __cplusplus
 }
